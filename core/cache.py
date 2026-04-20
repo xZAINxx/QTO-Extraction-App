@@ -16,7 +16,8 @@ def _fingerprint(pdf_path: str) -> str:
 
 def _row_to_dict(r: QTORow) -> dict:
     return {
-        "s_no": r.s_no, "tag": r.tag, "drawings_details": r.drawings_details,
+        "s_no": r.s_no, "tag": r.tag,
+        "drawings": r.drawings, "details": r.details, "math_trail": r.math_trail,
         "description": r.description, "qty": r.qty, "units": r.units,
         "unit_price": r.unit_price, "total_formula": r.total_formula,
         "trade_division": r.trade_division, "is_header_row": r.is_header_row,
@@ -27,6 +28,10 @@ def _row_to_dict(r: QTORow) -> dict:
 
 
 def _dict_to_row(d: dict) -> QTORow:
+    # Migrate old cache entries that used drawings_details instead of drawings/details
+    legacy = d.pop("drawings_details", None)
+    if legacy and not d.get("drawings") and not d.get("details"):
+        d["drawings"] = legacy
     return QTORow(**d)
 
 

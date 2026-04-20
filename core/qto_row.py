@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 class QTORow:
     s_no: int = 0
     tag: str = ""
-    drawings_details: str = ""
+    drawings: str = ""
+    details: str = ""
+    math_trail: str = ""
     description: str = ""
     qty: float = 0.0
     units: str = ""

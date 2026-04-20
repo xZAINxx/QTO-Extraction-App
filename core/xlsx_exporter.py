@@ -201,10 +201,9 @@ def _write_section_header(ws, row_num: int, label: str, ref_styles: dict):
 
 
 def _write_data_row(ws, row_num: int, row: QTORow):
-    """Write a single QTO data row."""
-    ws[f"A{row_num}"] = row.s_no if row.s_no else None
-    ws[f"B{row_num}"] = row.drawings_details
-    ws[f"C{row_num}"] = row.tag
+    """Write a single QTO data row. Column A is intentionally not written — preserves =A[prev]+1 chain formula."""
+    ws[f"B{row_num}"] = row.drawings
+    ws[f"C{row_num}"] = row.details
     ws[f"D{row_num}"] = row.description
     ws[f"E{row_num}"] = row.qty if row.qty else None
     ws[f"F{row_num}"] = row.units
@@ -216,7 +215,7 @@ def _write_data_row(ws, row_num: int, row: QTORow):
     if row.needs_review:
         amber = "00F59E0B"
         side = Side(style="medium", color=amber)
-        ws[f"A{row_num}"].border = Border(left=side)
+        ws[f"B{row_num}"].border = Border(left=side)
 
 
 def _find_subtotal_row(ws) -> Optional[int]:

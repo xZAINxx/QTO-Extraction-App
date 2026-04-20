@@ -9,16 +9,33 @@ from parser.keynote_format_infer import infer_keynote_pattern, count_callouts_on
 from parser.title_block_reader import TitleBlockInfo
 
 
+_CATEGORY_LABEL_RE = re.compile(
+    r'(CONSTRUCTION\s+KEYNOTES?#?|SELECTIVE\s+REMOVAL\s+KEYNOTES?#?|GENERAL\s+NOTES?#?|LEGEND/?)',
+    re.IGNORECASE,
+)
+
+
+def _extract_category_label(header_text: str) -> str:
+    m = _CATEGORY_LABEL_RE.search(header_text)
+    if m:
+        return m.group(0).strip().rstrip("#/").strip()
+    # Fall back to first non-None word token
+    first_word = header_text.split()[0] if header_text.strip() else ""
+    return first_word.upper()
+
+
 def extract_type_a(
     region: TableRegion,
     page: fitz.Page,
     sheet_info: TitleBlockInfo,
     ai_client=None,
 ) -> list[dict]:
-    """Keyed notes: returns list of {id, description, qty} dicts."""
+    """Keyed notes: returns list of {id, description, qty, category_label} dicts."""
     rows = region.rows
     if not rows:
         return []
+
+    category_label = _extract_category_label(region.header_text or "")
 
     # Find ID column (usually first non-header row, first non-empty cell)
     data_rows = [r for r in rows if r and any(c for c in r)]
@@ -40,7 +57,7 @@ def extract_type_a(
             for id_val, desc in parsed:
                 if desc:
                     id_values.append(id_val)
-                    result.append({"id": id_val, "description": desc, "qty": 0})
+                    result.append({"id": id_val, "description": desc, "qty": 0, "category_label": category_label})
             continue
 
         # Normal 2-column table
@@ -56,12 +73,12 @@ def extract_type_a(
             for pid, pdesc in parsed:
                 if pdesc:
                     id_values.append(pid)
-                    result.append({"id": pid, "description": pdesc, "qty": 0})
+                    result.append({"id": pid, "description": pdesc, "qty": 0, "category_label": category_label})
             continue
 
         if id_val and desc:
             id_values.append(id_val)
-            result.append({"id": id_val, "description": desc, "qty": 0})
+            result.append({"id": id_val, "description": desc, "qty": 0, "category_label": category_label})
 
     # Infer keynote pattern and count callouts on the page
     pattern = infer_keynote_pattern(id_values)

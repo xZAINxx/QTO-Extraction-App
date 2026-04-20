@@ -5,18 +5,18 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QComboBox, QLineEdit, QLabel, QMenu, QAbstractItemView, QHeaderView,
-    QPushButton, QFrame,
+    QPushButton, QFrame, QStackedWidget,
 )
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal
-from PyQt6.QtGui import QColor, QBrush, QFont, QAction
 
 from core.qto_row import QTORow
+from PyQt6.QtGui import QColor, QBrush, QFont, QAction, QPalette
 from ui.theme import (
     SURFACE_1, SURFACE_2, SURFACE_3, SECTION_BG, TEXT_1, TEXT_2, TEXT_3,
     BORDER_HEX, AMBER, INDIGO, CANVAS,
 )
 
-_COLS = ["S.NO", "DRAWINGS / DETAILS", "TAG", "DESCRIPTION OF WORK", "QTY", "UNITS", "UNIT PRICE", "TOTAL"]
+_COLS = ["S.NO", "DRAWINGS", "DETAILS", "DESCRIPTION OF WORK", "QTY", "UNITS", "UNIT PRICE", "TOTAL"]
 _COL_EDITABLE = {3, 4, 5, 6}   # Description, QTY, Units, Unit Price are editable
 
 _AMBER_COLOR = QColor(AMBER)
@@ -96,17 +96,74 @@ class ResultsTable(QWidget):
         self._table.setColumnWidth(6, 90)   # Unit Price
         self._table.setColumnWidth(7, 90)   # Total
 
-        layout.addWidget(self._table)
+        # Empty state
+        self._empty_state = self._build_empty_state()
+
+        # Stack: show table or empty state
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._empty_state)  # index 0
+        self._stack.addWidget(self._table)         # index 1
+        self._stack.setCurrentIndex(0)
+
+        layout.addWidget(self._stack)
+
+    def _build_empty_state(self) -> QWidget:
+        container = QWidget()
+        container.setStyleSheet(
+            f"QWidget {{ background: {SURFACE_1}; border-radius: 8px; border: 1px solid {BORDER_HEX}; }}"
+        )
+        inner = QVBoxLayout(container)
+        inner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        inner.setSpacing(8)
+
+        icon = QLabel("pdf")
+        icon_font = QFont(".AppleSystemUIFont")
+        icon_font.setPointSize(10)
+        icon_font.setBold(True)
+        icon.setFont(icon_font)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setStyleSheet(
+            f"color: {BORDER_HEX}; background: {SURFACE_3}; border: 1px solid {BORDER_HEX};"
+            f"border-radius: 6px; padding: 6px 10px; letter-spacing: 0.12em;"
+        )
+
+        title = QLabel("No drawing set loaded")
+        title_font = QFont(".AppleSystemUIFont")
+        title_font.setPointSize(13)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(f"color: {TEXT_2}; background: transparent; border: none;")
+
+        subtitle = QLabel("Drop a PDF into the sidebar or click Browse to begin")
+        subtitle_font = QFont(".AppleSystemUIFont")
+        subtitle_font.setPointSize(11)
+        subtitle.setFont(subtitle_font)
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setStyleSheet(f"color: {TEXT_3}; background: transparent; border: none;")
+        subtitle.setWordWrap(True)
+        subtitle.setMaximumWidth(320)
+
+        inner.addStretch(2)
+        inner.addWidget(icon, 0, Qt.AlignmentFlag.AlignCenter)
+        inner.addSpacing(6)
+        inner.addWidget(title)
+        inner.addWidget(subtitle, 0, Qt.AlignmentFlag.AlignCenter)
+        inner.addStretch(3)
+
+        return container
 
     def load_rows(self, rows: list[QTORow]):
         self._rows = rows
         self._rebuild_filters()
         self._apply_filters()
+        self._stack.setCurrentIndex(1 if rows else 0)
 
     def append_row(self, row: QTORow):
         self._rows.append(row)
         self._rebuild_filters()
         self._apply_filters()
+        self._stack.setCurrentIndex(1)
 
     def _rebuild_filters(self):
         trades = sorted(set(r.trade_division for r in self._rows if r.trade_division and not r.is_header_row))
@@ -165,8 +222,8 @@ class ResultsTable(QWidget):
 
             cells = [
                 ("" if row.is_header_row else (str(row.s_no) if row.s_no else "")),
-                row.drawings_details,
-                row.tag,
+                row.drawings,
+                row.details,
                 row.description,
                 ("" if row.is_header_row else (str(row.qty) if row.qty else "")),
                 row.units,
@@ -223,6 +280,7 @@ class ResultsTable(QWidget):
         jump_act = QAction(f"Jump to PDF Page {row.source_page}", menu)
 
         delete_act.triggered.connect(lambda: self._delete_row(idx))
+        add_act.triggered.connect(lambda: self._add_row_below(idx))
         review_act.triggered.connect(lambda: self._mark_reviewed(idx))
         jump_act.triggered.connect(lambda: self.row_jump_requested.emit(row.source_page, row.source_sheet))
 
@@ -238,6 +296,11 @@ class ResultsTable(QWidget):
 
     def _delete_row(self, idx: int):
         self._rows.pop(idx)
+        self._apply_filters()
+
+    def _add_row_below(self, idx: int):
+        new_row = QTORow(description="", units="EA", needs_review=True)
+        self._rows.insert(idx + 1, new_row)
         self._apply_filters()
 
     def _mark_reviewed(self, idx: int):

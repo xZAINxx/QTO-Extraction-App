@@ -1,5 +1,7 @@
 """Main application window — dark theme, sidebar + main area layout."""
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -20,9 +22,11 @@ from ui.stats_bar import StatsBar
 from ui.progress_panel import ProgressPanel
 from ui.results_table import ResultsTable
 from core.qto_row import QTORow
+from core.cache import ResultCache
 
 
 class ExtractionWorker(QObject):
+    page_started = pyqtSignal(int)          # page_num — emitted before processing begins
     progress = pyqtSignal(int, int, str)    # (current, total, page_type)
     row_ready = pyqtSignal(list)            # list of QTORow for one page
     tokens_updated = pyqtSignal(int, int, int, int, int, float)
@@ -42,7 +46,6 @@ class ExtractionWorker(QObject):
     def run(self):
         try:
             import yaml
-            from core.cache import ResultCache
             from core.token_tracker import TokenTracker
             from ai.client import AIClient
             from core.assembler import Assembler
@@ -78,6 +81,7 @@ class ExtractionWorker(QObject):
                 if self._cancel:
                     break
 
+                self.page_started.emit(page_info.page_num)
                 self.progress.emit(page_info.page_num, total, page_info.page_type)
                 classifications[str(page_info.page_num)] = {
                     "page_type": page_info.page_type,
@@ -92,7 +96,7 @@ class ExtractionWorker(QObject):
                     self.row_ready.emit(rows)
 
             if not self._cancel:
-                grouped = assembler.group_by_csi(all_rows)
+                grouped = assembler.group_by_section(all_rows)
                 validate(grouped)
                 cache.save(self._pdf_path, grouped, classifications)
                 self.finished.emit(grouped, False)
@@ -111,6 +115,7 @@ class MainWindow(QMainWindow):
         self._project_meta: dict = {}
         self._worker: Optional[ExtractionWorker] = None
         self._thread: Optional[QThread] = None
+        self._cache: Optional[ResultCache] = None
 
         self.setWindowTitle("Zeconic QTO Tool")
         self.resize(1440, 900)
@@ -139,7 +144,10 @@ class MainWindow(QMainWindow):
 
         # Title
         title = QLabel("Zeconic QTO")
-        title.setFont(QFont("Plus Jakarta Sans", 14, QFont.Weight.Bold))
+        title_font = QFont(".AppleSystemUIFont")
+        title_font.setPointSize(14)
+        title_font.setBold(True)
+        title.setFont(title_font)
         title.setStyleSheet(f"color: {TEXT_1};")
         sidebar_layout.addWidget(title)
 
@@ -199,6 +207,11 @@ class MainWindow(QMainWindow):
         root.addWidget(sidebar)
         root.addWidget(main_area, 1)
 
+    # ── Helpers ────────────────────────────────────────────────────────────
+
+    def _data_row_count(self) -> int:
+        return sum(1 for r in self._rows if not r.is_header_row)
+
     # ── Slots ──────────────────────────────────────────────────────────────
 
     def _on_pdf_selected(self, path: str):
@@ -207,14 +220,14 @@ class MainWindow(QMainWindow):
         self._export_btn.setEnabled(False)
         self._results.load_rows([])
 
-        # Check cache
-        from core.cache import ResultCache
-        cache = ResultCache(self._config.get("cache_dir", "./cache"))
-        cached = cache.load(path)
+        if self._cache:
+            self._cache.close()
+        self._cache = ResultCache(self._config.get("cache_dir", "./cache"))
+        cached = self._cache.load(path)
         if cached:
             self._rows = cached
             self._results.load_rows(cached)
-            self._stats.update_rows(len([r for r in cached if not r.is_header_row]))
+            self._stats.update_rows(self._data_row_count())
             self._stats.show_cache_hit(True)
             self._export_btn.setEnabled(True)
 
@@ -223,6 +236,14 @@ class MainWindow(QMainWindow):
 
     def _run_extraction(self):
         if not self._pdf_path:
+            return
+        if self._api_key_missing:
+            QMessageBox.warning(
+                self,
+                "API Key Required",
+                "Set the ANTHROPIC_API_KEY environment variable to enable AI extraction.\n\n"
+                "Add it to a .env file in the app directory or export it in your shell.",
+            )
             return
 
         import fitz
@@ -244,6 +265,7 @@ class MainWindow(QMainWindow):
         self._thread = QThread()
         self._worker.moveToThread(self._thread)
 
+        self._worker.page_started.connect(self._on_page_started)
         self._worker.progress.connect(self._on_page_progress)
         self._worker.row_ready.connect(self._on_rows_ready)
         self._worker.tokens_updated.connect(self._on_tokens)
@@ -265,14 +287,17 @@ class MainWindow(QMainWindow):
         self._run_btn.clicked.disconnect()
         self._run_btn.clicked.connect(self._run_extraction)
 
+    def _on_page_started(self, page_num: int):
+        self._progress.set_page_running(page_num)
+
     def _on_page_progress(self, current: int, total: int, page_type: str):
         self._progress.set_page_status(current, "done", page_type)
         self._stats.update_progress(current, total)
 
     def _on_rows_ready(self, rows: list):
-        for r in rows:
-            self._rows.append(r)
-        self._stats.update_rows(len([r for r in self._rows if not r.is_header_row]))
+        self._rows.extend(rows)
+        self._results.load_rows(self._rows)
+        self._stats.update_rows(self._data_row_count())
 
     def _on_tokens(self, inp: int, out: int, cr: int, cw: int, calls: int, cost: float):
         self._stats.update_tokens(inp, out, cr, cw, calls, cost)
@@ -282,17 +307,19 @@ class MainWindow(QMainWindow):
         self._results.load_rows(rows)
         self._progress.set_complete()
         self._stats.show_cache_hit(from_cache)
-        self._stats.update_rows(len([r for r in rows if not r.is_header_row]))
+        self._stats.update_rows(self._data_row_count())
         self._export_btn.setEnabled(True)
         self._reset_run_btn()
         if self._thread:
             self._thread.quit()
+            self._thread.wait(3000)
 
     def _on_error(self, msg: str):
         QMessageBox.critical(self, "Extraction Error", msg)
         self._reset_run_btn()
         if self._thread:
             self._thread.quit()
+            self._thread.wait(3000)
 
     def _export(self):
         from core.xlsx_exporter import export
@@ -314,13 +341,60 @@ class MainWindow(QMainWindow):
     def _on_jump_page(self, page_num: int, sheet: str):
         if not self._pdf_path or not page_num:
             return
-        # Open PDF at page in default viewer
-        import subprocess, sys
         try:
             if sys.platform == "darwin":
+                # Open PDF first, then navigate to the specific page via AppleScript
                 subprocess.Popen(["open", "-a", "Preview", self._pdf_path])
+                script = (
+                    f'tell application "Preview"\n'
+                    f'  activate\n'
+                    f'  delay 1\n'
+                    f'  tell front document\n'
+                    f'    go to page {page_num}\n'
+                    f'  end tell\n'
+                    f'end tell'
+                )
+                subprocess.Popen(["osascript", "-e", script])
         except Exception:
             pass
 
     def _retry_page(self, page_num: int):
-        pass  # Future: re-run extraction for a single page
+        if not self._pdf_path:
+            return
+        # Re-run extraction for a single page and merge result back
+        from ai.client import AIClient
+        from core.assembler import Assembler
+        from core.token_tracker import TokenTracker
+        import fitz
+
+        try:
+            tracker = TokenTracker()
+            ai = AIClient(self._config, tracker)
+            assembler = Assembler(self._config, ai, tracker)
+            doc = fitz.open(self._pdf_path)
+            page = doc[page_num - 1]
+            from parser.pdf_splitter import classify_page
+            text = page.get_text("text") or ""
+            page_info = classify_page(page_num, text)
+            new_rows = assembler.process_page(page, page_info, self._pdf_path)
+            doc.close()
+            # Remove old rows from this page and append new ones
+            self._rows = [r for r in self._rows if r.source_page != page_num]
+            self._rows.extend(new_rows)
+            self._results.load_rows(self._rows)
+            self._stats.update_rows(self._data_row_count())
+        except Exception as e:
+            QMessageBox.warning(self, "Retry Failed", str(e))
+
+    def closeEvent(self, event):
+        if self._worker:
+            self._worker.cancel()
+        if self._thread and self._thread.isRunning():
+            self._thread.quit()
+            self._thread.wait(3000)
+        if self._cache:
+            try:
+                self._cache.close()
+            except Exception:
+                pass
+        event.accept()

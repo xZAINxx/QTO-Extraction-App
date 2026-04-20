@@ -8,7 +8,7 @@ title_block_region:
   side: right
   pct: 0.15
 sheet_number_regex: '^[A-Z]{1,3}\s*-?\s*\d{2,4}(\.\d{1,2})?$'
-scale_regex: 'SCALE\s*[:\s=]\s*(\d+/\d+"\s*=\s*\d+['\''-]\d+"|\d+:\d+|N\.?T\.?S\.?|AS\s*SHOWN)'
+scale_regex: "SCALE\\s*[:\\s=]\\s*(\\d+/\\d+\"\\s*=\\s*\\d+['-]\\d+\"|\\d+:\\d+|N\\.?T\\.?S\\.?|AS\\s*SHOWN)"
 min_vector_text_length: 10
 
 output_dir: "./output"
@@ -31,3 +31,17 @@ csi_keywords:
   "DIVISION 23": ["hvac", "duct", "mechanical", "fan", "louver", "convector", "ventilation"]
   "DIVISION 26": ["electrical", "panel", "conduit", "lighting", "outlet", "switch"]
   "DIVISION 32": ["paving", "curb", "sidewalk", "site", "exterior", "landscaping"]
+
+units_canonical:
+  SF: SQ FT
+  SQFT: SQ FT
+  "sq.ft.": SQ FT
+  sqft: SQ FT
+  LNFT: LNFT
+  LF: LF
+  ft: FT
+  EACH: EA
+  each: EA
+  LS: LS
+  CUYD: YARD
+  CY: YARD

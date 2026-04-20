@@ -29,7 +29,7 @@ class AIClient:
         self._max_tokens = config.get("max_tokens_per_page_call", 8000)
         self._tracker = tracker
         self._classify_cache: dict[str, tuple[str, float]] = {}
-        self._normalize_cache: dict[str, str] = {}
+        self._compose_cache: dict[str, str] = {}
 
     def _call(self, system: str, messages: list, max_tokens: int | None = None) -> str:
         resp = self._client.messages.create(
@@ -69,22 +69,20 @@ class AIClient:
         self._classify_cache[key] = (division, confidence)
         return division, confidence
 
-    def normalize_description(self, raw: str) -> str:
-        """Normalize a raw keynote description. Cached per string."""
-        key = raw.strip()
-        if key in self._normalize_cache:
-            return self._normalize_cache[key]
+    def compose_description(self, raw: str, sheet: str = "", keynote_ref: str = "") -> str:
+        """Compose a GC-estimate-grade description from raw keynote text. Cached per (raw, sheet, keynote_ref)."""
+        from ai.description_normalizer import _SYSTEM
+        raw = raw.strip()
+        cache_key = f"{raw}|{sheet}|{keynote_ref}"
+        if cache_key in self._compose_cache:
+            return self._compose_cache[cache_key]
+        user_content = f"Sheet: {sheet}\nKeynote: {keynote_ref}\nRaw: {raw}"
         try:
-            result = self._call(
-                "You normalize construction keynote descriptions to clean, professional sentence case. "
-                "Output ONLY the normalized description string — no JSON, no quotes, no explanation.",
-                [{"role": "user", "content": raw}],
-                max_tokens=128,
-            )
-            self._normalize_cache[key] = result.strip()
+            result = self._call(_SYSTEM, [{"role": "user", "content": user_content}], max_tokens=256).strip()
         except Exception:
-            self._normalize_cache[key] = key
-        return self._normalize_cache[key]
+            result = raw.upper()
+        self._compose_cache[cache_key] = result
+        return result
 
     def interpret_image_region(self, image_bytes: bytes, prompt: str) -> str:
         """Send a cropped image region to Claude Vision. Returns raw text."""
