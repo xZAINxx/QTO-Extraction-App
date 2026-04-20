@@ -19,6 +19,15 @@ _DATE_RE = re.compile(
 )
 
 
+def normalize_sheet_number(sheet: str) -> str:
+    """Convert A107.00 → A-107. Already-hyphenated formats (A-106, R-001, T-002) pass through unchanged."""
+    sheet = sheet.strip()
+    m = re.match(r'^([A-Za-z]{1,3})\s*(\d{1,4})(?:\.\d+)?$', sheet)
+    if m:
+        return f"{m.group(1).upper()}-{m.group(2)}"
+    return sheet
+
+
 @dataclass
 class TitleBlockInfo:
     sheet_number: str = ""
@@ -52,6 +61,7 @@ def read_title_block(
         info = _parse_vector_strip(strip_text + "\n" + full_text)
         info.source = "vector"
         if info.sheet_number:
+            info.sheet_number = normalize_sheet_number(info.sheet_number)
             return info
 
     # Fall back to vision
@@ -60,6 +70,7 @@ def read_title_block(
             img_bytes = crop_region_image(page, rect_pct, dpi=200)
             info = _vision_extract(img_bytes, ai_client)
             info.source = "vision"
+            info.sheet_number = normalize_sheet_number(info.sheet_number)
             return info
         except Exception:
             pass

@@ -96,7 +96,7 @@ class ExtractionWorker(QObject):
                     self.row_ready.emit(rows)
 
             if not self._cancel:
-                grouped = assembler.group_by_section(all_rows)
+                grouped = assembler.sort_by_sheet(all_rows)
                 validate(grouped)
                 cache.save(self._pdf_path, grouped, classifications)
                 self.finished.emit(grouped, False)

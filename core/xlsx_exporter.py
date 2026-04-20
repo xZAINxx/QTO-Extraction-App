@@ -88,35 +88,20 @@ def export(
     _clear_preallocated(ws)
 
     # 4. Insert QTO rows starting at row 44
-    data_rows_only = [r for r in rows if not r.is_header_row]
-    header_rows = [r for r in rows if r.is_header_row]
-
     current_row = _FIRST_DATA_ROW
-    inserted_count = 0
 
-    # Track where data rows start/end for SUM formula update
-    first_data_row = _FIRST_DATA_ROW
-    last_data_row = _FIRST_DATA_ROW
-
-    # Pre-calculate how many rows we'll need beyond the 56 pre-allocated
-    needed = len(rows)
-    available = _LAST_PREALLOCATED - _FIRST_DATA_ROW + 1
-    extra = max(0, needed - available)
+    extra = max(0, len(rows) - (_LAST_PREALLOCATED - _FIRST_DATA_ROW + 1))
     if extra > 0:
-        # Insert extra rows before the subtotal row
         ws.insert_rows(_ROW_SUBTOTAL, extra)
 
-    # Now write each row
     for qto_row in rows:
         if qto_row.is_header_row:
             _write_section_header(ws, current_row, qto_row.description, ref_styles)
         else:
             _write_data_row(ws, current_row, qto_row)
-            last_data_row = current_row
         current_row += 1
 
     # 5. Update SUM formula in SUB-TOTAL row (which may have shifted)
-    subtotal_row = current_row  # right after last data row... actually find it
     subtotal_row = _find_subtotal_row(ws)
     if subtotal_row:
         ws[f"H{subtotal_row}"] = f"=SUM(H{_ROW_SECTION_GEN + 1}:H{subtotal_row - 1})"
@@ -164,16 +149,12 @@ def _capture_section_styles(ws) -> dict:
 
 
 def _clear_preallocated(ws):
-    """Clear content of pre-allocated blank rows 44-99."""
+    """Clear content of pre-allocated blank rows 44-99. Column A skipped — chain formulas preserved."""
     for row in range(_FIRST_DATA_ROW, _LAST_PREALLOCATED + 1):
-        for col in range(1, _NUM_COLS + 1):
+        for col in range(2, _NUM_COLS + 1):  # Skip col A
             cell = ws.cell(row=row, column=col)
-            # Only clear if not a live formula we want to preserve
             if cell.value is not None:
-                v = str(cell.value)
-                # Clear chain formulas (=A43+1 style) and blank TOTAL formulas
-                if v.startswith("=A") or v.startswith("=E"):
-                    cell.value = None
+                cell.value = None
 
 
 def _write_section_header(ws, row_num: int, label: str, ref_styles: dict):
@@ -201,17 +182,21 @@ def _write_section_header(ws, row_num: int, label: str, ref_styles: dict):
 
 
 def _write_data_row(ws, row_num: int, row: QTORow):
-    """Write a single QTO data row. Column A is intentionally not written — preserves =A[prev]+1 chain formula."""
+    """Write a single QTO data row. Column A intentionally not written — preserves =A[prev]+1 chain formula."""
     ws[f"B{row_num}"] = row.drawings
     ws[f"C{row_num}"] = row.details
-    ws[f"D{row_num}"] = row.description
+    d_cell = ws[f"D{row_num}"]
+    d_cell.value = row.description
+    d_cell.alignment = Alignment(wrap_text=True)
     ws[f"E{row_num}"] = row.qty if row.qty else None
     ws[f"F{row_num}"] = row.units
-    ws[f"G{row_num}"] = None  # Unit price — always blank
+    ws[f"G{row_num}"] = None
     ws[f"H{row_num}"] = f"=E{row_num}*G{row_num}"
     row.total_formula = f"=E{row_num}*G{row_num}"
 
-    # Amber left-border indicator for needs_review rows
+    line_count = (row.description or "").count('\n') + 1
+    ws.row_dimensions[row_num].height = 15 * max(2, line_count)
+
     if row.needs_review:
         amber = "00F59E0B"
         side = Side(style="medium", color=amber)

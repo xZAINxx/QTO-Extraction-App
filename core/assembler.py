@@ -1,6 +1,6 @@
 """Assemble parser output + AI classification into final QTORow list."""
 import re
-from typing import Callable, Optional
+from typing import Optional
 
 import fitz
 
@@ -15,6 +15,8 @@ from parser.scale_detector import detect_scale
 from parser.geometry_reader import read_geometry
 from parser.scope_note_classifier import filter_scope_notes
 from parser.ocr_fallback import extract_keynote_table_vision
+from parser.legend_extractor import extract_legend_items
+from parser.allowance_extractor import extract_allowances
 from ai.description_normalizer import DescriptionComposer
 from ai.csi_classifier import CSIClassifier
 
@@ -73,6 +75,34 @@ class Assembler:
 
         try:
             title_info = read_title_block(page, self._config, self._ai)
+
+            # T-002 ALLOWANCES/PROVISIONS sheet — use dedicated extractor
+            if "T-002" in (title_info.sheet_number or "").upper():
+                items = extract_allowances(page, title_info, self._ai)
+                for item in items:
+                    item.setdefault("drawings", "T-002")
+                    row = self._make_row(item, title_info, page_info, "allowance")
+                    if row:
+                        rows.append(row)
+                return rows
+
+            # Non-T-002 pages: try legend extractor, then fall through to table extractors
+            legend_items = extract_legend_items(page, self._ai)
+            for item in legend_items:
+                detail_refs = item.get("detail_refs") or []
+                sheet = title_info.sheet_number or ""
+                legend_ref = f"LEGEND/{sheet.replace('-', '')}" if sheet else "LEGEND"
+                details = f"{legend_ref} & {detail_refs[0]}" if detail_refs else legend_ref
+                synthetic = {
+                    "description": item.get("work_description", ""),
+                    "units": item.get("units", "EA"),
+                    "qty": 1,
+                    "details_override": details,
+                }
+                row = self._make_row(synthetic, title_info, page_info, "legend")
+                if row:
+                    rows.append(row)
+
             tables = detect_tables(page, pdf_path, page_info.page_num)
             scale = detect_scale(page)
 
@@ -157,7 +187,7 @@ class Assembler:
             return None
 
         keynote_id = item.get("id", "")
-        sheet_number = title.sheet_number or ""
+        sheet_number = item.get("drawings") or title.sheet_number or ""
         keynote_ref = f"{keynote_id}/{sheet_number}" if keynote_id else sheet_number
         category_label = item.get("category_label", "")
 
@@ -165,7 +195,10 @@ class Assembler:
         division, conf = self._classifier.classify(desc)
 
         drawings = sheet_number
-        details = f"{category_label} {keynote_ref}".strip() if category_label else keynote_ref
+        if item.get("details_override"):
+            details = item["details_override"]
+        else:
+            details = f"{category_label} {keynote_ref}".strip() if category_label else keynote_ref
 
         raw_units = item.get("units", "EA") or "EA"
         units = self._normalize_units(raw_units)
@@ -189,11 +222,8 @@ class Assembler:
     def _normalize_units(self, units: str) -> str:
         return self._units_canonical.get(units, units)
 
-    def group_by_section(self, rows: list[QTORow]) -> list[QTORow]:
-        """
-        Return only data rows (no header rows) sorted by sheet number then details.
-        Assigns s_no and tag counters sequentially.
-        """
+    def sort_by_sheet(self, rows: list[QTORow]) -> list[QTORow]:
+        """Return only data rows sorted by sheet number then details. Assigns s_no and tag sequentially."""
         data_rows = [r for r in rows if not r.is_header_row]
         data_rows.sort(key=lambda r: (_sheet_sort_key(r.drawings), r.details))
 
