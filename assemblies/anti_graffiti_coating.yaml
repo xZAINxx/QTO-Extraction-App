@@ -1,0 +1,21 @@
+key: anti_graffiti_coating
+name: Anti-Graffiti Coating
+trade: finishes
+csi_division: DIVISION 09
+units: SQ FT
+description_template: |-
+  PROVIDE & INSTALL ANTI-GRAFFITI COATING @ {location} AS PER {detail_ref}
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: FACADE
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: LEGEND/A106
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0
+math_trail_template: '({length}'' L X {height}'' H = {area} SQFT)'

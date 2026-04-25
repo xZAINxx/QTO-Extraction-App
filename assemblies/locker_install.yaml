@@ -1,0 +1,24 @@
+key: locker_install
+name: Lockers (Metal, Single-Tier)
+trade: specialties
+csi_division: DIVISION 10
+units: EA
+description_template: |-
+  PROVIDE & INSTALL NEW METAL LOCKERS @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -SLOPED TOP
+  -CONTINUOUS BASE
+  -COMBINATION LOCKS
+  -NUMBER PLATES
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: LOCKER ROOM
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 1/A801
+  - name: qty
+    label: Quantity (EA)
+    type: number
+    default: 1

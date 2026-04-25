@@ -1,0 +1,29 @@
+key: resin_membrane
+name: Cold-Fluid-Applied Resin Membrane
+trade: roofing
+csi_division: DIVISION 07
+units: SQ FT
+description_template: |-
+  PROVIDE & INSTALL COLD FLUID-APPLIED RESIN MEMBRANE @ {location} AS PER {detail_ref}
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: ROOF
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: LEGEND/A106 & DETAIL 2/A421
+  - name: length
+    label: Length (ft)
+    type: number
+    default: 0
+  - name: width
+    label: Width (ft)
+    type: number
+    default: 0
+  - name: qty
+    label: Override quantity (SQ FT)
+    type: number
+    default: 0
+math_trail_template: '({length}'' L X {width}'' W = {area} SQFT)'

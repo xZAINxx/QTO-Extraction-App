@@ -1,0 +1,25 @@
+key: prime_paint_plaster_wall
+name: Prime & Paint Plaster Wall
+trade: finishes
+csi_division: DIVISION 09
+units: SQ FT
+description_template: |-
+  PRIME & PAINT PLASTER WALL ({height}' H) AS PER {detail_ref}
+inputs:
+  - name: height
+    label: Wall height (ft)
+    type: number
+    default: 13.33
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 2/A402
+  - name: length
+    label: Wall length (ft)
+    type: number
+    default: 0
+  - name: qty
+    label: Override quantity (SQ FT)
+    type: number
+    default: 0
+math_trail_template: '({length}'' L X {height}'' H = {area} SQFT)'

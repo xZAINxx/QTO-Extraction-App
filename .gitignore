@@ -20,6 +20,12 @@ output/
 # Test fixtures — large PDF (add manually if needed)
 tests/fixtures/*.pdf
 
+# Reference fixtures (large, kept locally only)
+QTO Tool/
+
+# YOLO model weights (downloaded at runtime)
+cv/weights/*.pt
+
 # API keys / secrets
 .env
 *.env

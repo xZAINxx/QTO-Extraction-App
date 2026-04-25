@@ -1,0 +1,23 @@
+key: brick_repointing
+name: Brick — Rake & Repoint
+trade: masonry
+csi_division: DIVISION 04
+units: SQ FT
+description_template: |-
+  RAKE & REPOINT EXIST. BRICK MASONRY @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -REMOVAL OF DETERIORATED MORTAR TO 3/4" MIN. DEPTH
+  -TYPE N MORTAR REPLACEMENT TO MATCH EXIST.
+  -TUCK POINTING TO MATCH EXIST. PROFILE
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: FACADE
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 2/A401
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

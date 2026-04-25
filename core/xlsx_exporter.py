@@ -194,8 +194,12 @@ def _write_data_row(ws, row_num: int, row: QTORow):
     ws[f"H{row_num}"] = f"=E{row_num}*G{row_num}"
     row.total_formula = f"=E{row_num}*G{row_num}"
 
-    line_count = (row.description or "").count('\n') + 1
-    ws.row_dimensions[row_num].height = 15 * max(2, line_count)
+    desc = row.description or ""
+    num_sub_bullets = sum(
+        1 for ln in desc.splitlines()
+        if ln.lstrip().startswith(("-", "•"))
+    )
+    ws.row_dimensions[row_num].height = max(30, 15 * (1 + num_sub_bullets))
 
     if row.needs_review:
         amber = "00F59E0B"

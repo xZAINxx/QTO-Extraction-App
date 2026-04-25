@@ -1,0 +1,23 @@
+key: site_paving
+name: Site Paving / Asphalt
+trade: sitework
+csi_division: DIVISION 32
+units: SQ FT
+description_template: |-
+  REMOVE & REPLACE W/ NEW ASPHALT PAVING @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -SUBGRADE PREP & COMPACTION
+  -6" CRUSHED-STONE BASE
+  -2" BINDER + 1.5" TOPCOAT
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: PARKING LOT
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: C-101
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

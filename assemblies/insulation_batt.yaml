@@ -1,0 +1,24 @@
+key: insulation_batt
+name: Batt Insulation
+trade: thermal
+csi_division: DIVISION 07
+units: SQ FT
+description_template: |-
+  PROVIDE & INSTALL R-{r_value} BATT INSULATION @ {location} AS PER {detail_ref}
+inputs:
+  - name: r_value
+    label: R-value
+    type: text
+    default: '19'
+  - name: location
+    label: Location
+    type: text
+    default: WALL
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 4/A501
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

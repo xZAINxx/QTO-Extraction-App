@@ -1,0 +1,24 @@
+key: electrical_fixture
+name: Electrical Fixture (generic)
+trade: electrical
+csi_division: DIVISION 26
+units: EA
+description_template: |-
+  PROVIDE & INSTALL {fixture_type} @ {location} AS PER {detail_ref} INCLUDING CONDUIT, WIRE & FINAL CONNECTION
+inputs:
+  - name: fixture_type
+    label: Fixture (e.g. LED LIGHT, RECEPTACLE, SWITCH, PANEL)
+    type: text
+    default: LED LIGHT FIXTURE
+  - name: location
+    label: Location
+    type: text
+    default: GENERAL
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: E-101
+  - name: qty
+    label: Quantity (EA)
+    type: number
+    default: 1

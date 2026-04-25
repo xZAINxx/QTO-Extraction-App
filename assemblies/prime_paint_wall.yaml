@@ -1,0 +1,29 @@
+key: prime_paint_wall
+name: Prime & Paint — Wall
+trade: finishes
+csi_division: DIVISION 09
+units: SQ FT
+description_template: |-
+  PRIME & PAINT WALL ({height}' H) @ {location} AS PER {detail_ref}
+inputs:
+  - name: height
+    label: Wall height (ft)
+    type: number
+    default: 12
+  - name: location
+    label: Location
+    type: text
+    default: BULKHEAD
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: LEGEND/A107
+  - name: length
+    label: Wall length (ft)
+    type: number
+    default: 0
+  - name: qty
+    label: Override quantity (SQ FT)
+    type: number
+    default: 0
+math_trail_template: '({length}'' L X {height}'' H = {area} SQFT)'

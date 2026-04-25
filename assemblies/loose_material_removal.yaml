@@ -1,0 +1,25 @@
+key: loose_material_removal
+name: Loose / Damaged Material — Remove
+trade: demolition
+csi_division: DIVISION 02
+units: SQ FT
+description_template: |-
+  REMOVE LOOSE, DAMAGED & DETERIORATED MATERIAL AT WALL ({height}' H) AS PER {detail_ref}
+inputs:
+  - name: height
+    label: Wall height (ft)
+    type: number
+    default: 10.66
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: LEGEND/A103
+  - name: length
+    label: Length (ft)
+    type: number
+    default: 0
+  - name: qty
+    label: Override quantity (SQ FT)
+    type: number
+    default: 0
+math_trail_template: '({length}'' L X {height}'' H = {area} SQFT)'

@@ -1,0 +1,22 @@
+key: roof_hatch
+name: Roof Hatch (Insulated)
+trade: roofing
+csi_division: DIVISION 07
+units: EA
+description_template: |-
+  REMOVE & REPLACE W/ NEW HATCH @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -ALUM. FACED COVER W/ MIN. 3" INSULATION
+  -INTEGRAL HATCH RAIL SYSTEM 44"
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: ROOF 2
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: LEGEND/A106 & DETAIL 4/A423
+  - name: qty
+    label: Quantity (EA)
+    type: number
+    default: 1

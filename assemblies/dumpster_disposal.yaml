@@ -1,0 +1,16 @@
+key: dumpster_disposal
+name: Dumpster / Construction Disposal
+trade: general
+csi_division: DIVISION 01
+units: EA
+description_template: |-
+  PROVIDE DUMPSTER & DISPOSAL OF CONSTRUCTION DEBRIS AS PER {detail_ref} INCLUDING HAULING, TIPPING FEES & RECYCLING
+inputs:
+  - name: detail_ref
+    label: Detail / Note ref
+    type: text
+    default: GENERAL NOTES
+  - name: qty
+    label: Quantity (loads/EA)
+    type: number
+    default: 1

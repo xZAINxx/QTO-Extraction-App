@@ -4,6 +4,16 @@ import sys
 from pathlib import Path
 
 import yaml
+
+# Load .env from app directory before anything else
+_env_path = Path(__file__).resolve().parent / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            if _v and not os.environ.get(_k.strip()):
+                os.environ[_k.strip()] = _v.strip()
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 
@@ -34,8 +44,6 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Zeconic QTO Tool")
     app.setOrganizationName("Zeconic")
-    app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
-
     config = load_config()
 
     from ui.main_window import MainWindow

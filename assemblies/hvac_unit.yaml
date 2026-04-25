@@ -1,0 +1,24 @@
+key: hvac_unit
+name: HVAC Unit / Equipment (generic)
+trade: mechanical
+csi_division: DIVISION 23
+units: EA
+description_template: |-
+  PROVIDE & INSTALL {equipment} @ {location} AS PER {detail_ref} INCLUDING DUCTWORK CONNECTIONS, POWER & CONTROLS
+inputs:
+  - name: equipment
+    label: Equipment (e.g. AHU, RTU, FAN, CONVECTOR)
+    type: text
+    default: ROOFTOP UNIT
+  - name: location
+    label: Location
+    type: text
+    default: ROOF
+  - name: detail_ref
+    label: Detail / Schedule ref
+    type: text
+    default: M-101
+  - name: qty
+    label: Quantity (EA)
+    type: number
+    default: 1

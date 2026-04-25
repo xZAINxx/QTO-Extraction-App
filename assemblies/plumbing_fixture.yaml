@@ -1,0 +1,24 @@
+key: plumbing_fixture
+name: Plumbing Fixture (generic)
+trade: plumbing
+csi_division: DIVISION 22
+units: EA
+description_template: |-
+  PROVIDE & INSTALL {fixture_type} @ {location} AS PER {detail_ref} INCLUDING ROUGH-IN, TRAP, SUPPLY & WASTE CONNECTIONS
+inputs:
+  - name: fixture_type
+    label: Fixture (e.g. WATER CLOSET, LAVATORY, URINAL)
+    type: text
+    default: WATER CLOSET
+  - name: location
+    label: Location
+    type: text
+    default: TOILET ROOM
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: P-101
+  - name: qty
+    label: Quantity (EA)
+    type: number
+    default: 1

@@ -1,0 +1,24 @@
+key: maple_flooring
+name: Maple Flooring (25/32" T)
+trade: finishes
+csi_division: DIVISION 09
+units: SQ FT
+description_template: |-
+  PROVIDE & INSTALL MAPLE FLOORING (25/32" T) @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -6 MIL. CONT. POLYETHYLENE FILM
+  -1/2" RESILIENT UNDRELAYMENT
+  -2 LAYERS 15/32" PLYWOOD
+  -2" FLOORING FASTENERS
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: AUDITORIUM
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 1/A901 & LEGEND/A102
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

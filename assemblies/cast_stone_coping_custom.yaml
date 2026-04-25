@@ -1,0 +1,27 @@
+key: cast_stone_coping_custom
+name: Cast Stone Coping (custom thickness)
+trade: masonry
+csi_division: DIVISION 04
+units: LF
+description_template: |-
+  REMOVE & REPLACE W/ NEW ({thickness} T) CAST STONE COPING 26 GA. S.S. CONT. THREE WAY BOND INTERLOCKING FLASHING @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -1/2" DIA. S.S. 8" FISTAIL ANCHORS
+  -#4 @ 12" EPOXY COATED REBARS (2 MIN.)
+  -GLAV. MESH ON WATER PROOFING FELT BACKING
+inputs:
+  - name: thickness
+    label: Thickness (e.g. 1'-9")
+    type: text
+    default: 1'-3"
+  - name: location
+    label: Location
+    type: text
+    default: PARAPET
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: LEGEND/A106 & DETAIL 4/A401
+  - name: qty
+    label: Quantity (LF)
+    type: number
+    default: 0

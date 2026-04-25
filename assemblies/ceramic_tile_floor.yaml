@@ -1,0 +1,24 @@
+key: ceramic_tile_floor
+name: Ceramic Tile Floor
+trade: finishes
+csi_division: DIVISION 09
+units: SQ FT
+description_template: |-
+  PROVIDE & INSTALL NEW CERAMIC TILE FLOORING @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -CRACK ISOLATION MEMBRANE
+  -THIN-SET MORTAR
+  -GROUT (COLOR PER ARCHITECT)
+  -SS TRANSITION STRIPS @ DOORWAYS
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: TOILET ROOM
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 3/A901
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

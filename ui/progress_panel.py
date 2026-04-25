@@ -91,6 +91,14 @@ class ProgressPanel(QWidget):
         self._status_label.setStyleSheet(f"color: {TEXT_2}; font-size: 11px;")
         layout.addWidget(self._status_label)
 
+        # Phase 7 — batch status row. Hidden until cost-saver kicks in.
+        self._batch_label = QLabel("")
+        self._batch_label.setStyleSheet(
+            f"color: {AMBER}; font-size: 11px; padding: 2px 0px;"
+        )
+        self._batch_label.setVisible(False)
+        layout.addWidget(self._batch_label)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setMaximumHeight(200)
@@ -114,17 +122,50 @@ class ProgressPanel(QWidget):
             w.deleteLater()
         self._page_rows.clear()
 
-    def set_page_status(self, page_num: int, status: str, page_type: str = ""):
+    def _get_or_create_page_row(self, page_num: int) -> "PageRow":
         if page_num not in self._page_rows:
             row = PageRow(page_num, self._content)
             row.retry_requested.connect(self.retry_page)
             self._rows_layout.insertWidget(self._rows_layout.count() - 1, row)
             self._page_rows[page_num] = row
-        self._page_rows[page_num].set_status(status, page_type)
-        done = sum(1 for _ in range(1, page_num + 1))
+        return self._page_rows[page_num]
+
+    def set_page_status(self, page_num: int, status: str, page_type: str = ""):
+        self._get_or_create_page_row(page_num).set_status(status, page_type)
         self._progress_bar.setValue(page_num)
         self._status_label.setText(f"Processing page {page_num}/{self._progress_bar.maximum()}")
+
+    def set_page_running(self, page_num: int):
+        self._get_or_create_page_row(page_num).set_status("running")
 
     def set_complete(self):
         self._status_label.setText("Extraction complete")
         self._progress_bar.setValue(self._progress_bar.maximum())
+
+    def set_batch_status(
+        self,
+        message: str = "",
+        *,
+        done: bool = False,
+        error: bool = False,
+    ) -> None:
+        """Phase 7 — surface batched-compose progress (cost-saver mode).
+
+        Pass an empty ``message`` to hide the row entirely. ``done`` swaps
+        the colour to emerald, ``error`` to red. Anything else stays amber.
+        """
+        if not message:
+            self._batch_label.clear()
+            self._batch_label.setVisible(False)
+            return
+        if error:
+            colour = RED
+        elif done:
+            colour = EMERALD
+        else:
+            colour = AMBER
+        self._batch_label.setStyleSheet(
+            f"color: {colour}; font-size: 11px; padding: 2px 0px;"
+        )
+        self._batch_label.setText(message)
+        self._batch_label.setVisible(True)

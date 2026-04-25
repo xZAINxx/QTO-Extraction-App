@@ -1,0 +1,20 @@
+key: allowance_generic
+name: Allowance (generic line item)
+trade: general
+csi_division: DIVISION 01
+units: LS
+description_template: |-
+  (ALLOWANCE) {scope} AS PER {detail_ref}
+inputs:
+  - name: scope
+    label: Allowance scope (verb-first, ALL CAPS)
+    type: text
+    default: PROVIDE & INSTALL
+  - name: detail_ref
+    label: Detail / Allowance ref
+    type: text
+    default: ALLOWANCES# 1/T002
+  - name: qty
+    label: Quantity
+    type: number
+    default: 1

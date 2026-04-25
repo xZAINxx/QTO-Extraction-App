@@ -1,0 +1,22 @@
+key: face_brick_replacement
+name: Face Brick — Remove & Replace
+trade: masonry
+csi_division: DIVISION 04
+units: SQ FT
+description_template: |-
+  REMOVE & REPLACE W/ NEW FACE BRICKS @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -12 GA. S.S. VENEER ANCHOR @ 16" O.C. VERT. & 18" O.C. HORIZ.
+  -8 MM S.S. FLEXIBLE RESTORATION TIES @ 16" O.C.
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: FACADE
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 1/A401
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

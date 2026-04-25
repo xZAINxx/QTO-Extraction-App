@@ -1,0 +1,16 @@
+key: acoustical_ceiling_tiles
+name: Acoustical Lay-In Ceiling Tiles
+trade: finishes
+csi_division: DIVISION 09
+units: SQ FT
+description_template: |-
+  REMOVE & REPLACE W/ NEW ACOUSTICAL LAY-IN CEILING TILES AS PER {detail_ref}
+inputs:
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 5/A402 & LEGEND/A105
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

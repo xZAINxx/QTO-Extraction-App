@@ -1,0 +1,20 @@
+key: vented_resilient_base
+name: Vented Resilient Base (3" X 4")
+trade: finishes
+csi_division: DIVISION 09
+units: LF
+description_template: |-
+  PROVIDE & INSTALL 3" X 4" VENTED RESILIENT BASE @ {location} AS PER {detail_ref}
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: AUDITORIUM
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 1/A901
+  - name: qty
+    label: Quantity (LF)
+    type: number
+    default: 0

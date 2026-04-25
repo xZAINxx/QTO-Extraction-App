@@ -4,11 +4,19 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFormLayout, QFrame, QSpinBox, QFileDialog,
+    QCheckBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 
-from ui.theme import SURFACE_2, SURFACE_3, TEXT_1, TEXT_2, TEXT_3, BORDER_HEX, INDIGO, AMBER
+from ui.theme import CANVAS, SURFACE_2, SURFACE_3, TEXT_1, TEXT_2, TEXT_3, BORDER_HEX, INDIGO, AMBER
+
+
+_STYLE_IDLE = (
+    "QFrame#dropZone {{ background: {s2}; border: 1.5px dashed {border}; border-radius: 10px; }}"
+    "QFrame#dropZone:hover {{ background: {s3}; border-color: {indigo}; }}"
+)
+_STYLE_DRAG = "QFrame#dropZone {{ background: {s3}; border: 1.5px solid {indigo}; border-radius: 10px; }}"
 
 
 class DropZone(QFrame):
@@ -18,39 +26,46 @@ class DropZone(QFrame):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setObjectName("dropZone")
-        self.setStyleSheet(
-            f"QFrame#dropZone {{ background: {SURFACE_2}; border: 2px dashed {BORDER_HEX}; "
-            f"border-radius: 8px; }}"
-            f"QFrame#dropZone:hover {{ border-color: {INDIGO}; }}"
-        )
-        self.setMinimumHeight(80)
+        self._apply_idle_style()
+        self.setMinimumHeight(64)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(5)
+        layout.setContentsMargins(12, 12, 12, 12)
 
-        icon = QLabel("📄")
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet("font-size: 24px; background: transparent;")
-        label = QLabel("Drop PDF here or click Browse")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet(f"color: {TEXT_2}; font-size: 12px; background: transparent;")
+        main_label = QLabel("Drop PDF or click to Browse")
+        main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_label.setStyleSheet(
+            f"color: {TEXT_2}; font-size: 12px; font-weight: 600;"
+            f"background: transparent; border: none;"
+        )
 
-        layout.addWidget(icon)
-        layout.addWidget(label)
+        sub_label = QLabel("Architectural drawing sets · PDF only")
+        sub_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub_label.setStyleSheet(
+            f"color: {TEXT_3}; font-size: 10px; background: transparent; border: none;"
+        )
+
+        layout.addWidget(main_label)
+        layout.addWidget(sub_label)
+
+    def _apply_idle_style(self):
+        self.setStyleSheet(
+            _STYLE_IDLE.format(s2=SURFACE_2, s3=SURFACE_3, border=BORDER_HEX, indigo=INDIGO)
+        )
+
+    def _apply_drag_style(self):
+        self.setStyleSheet(_STYLE_DRAG.format(s3=SURFACE_3, indigo=INDIGO))
 
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
             e.acceptProposedAction()
-            self.setStyleSheet(
-                f"QFrame#dropZone {{ background: {SURFACE_3}; border: 2px solid {INDIGO}; "
-                f"border-radius: 8px; }}"
-            )
+            self._apply_drag_style()
 
     def dragLeaveEvent(self, e):
-        self.setStyleSheet(
-            f"QFrame#dropZone {{ background: {SURFACE_2}; border: 2px dashed {BORDER_HEX}; "
-            f"border-radius: 8px; }}"
-        )
+        self._apply_idle_style()
 
     def dropEvent(self, e: QDropEvent):
         urls = e.mimeData().urls()
@@ -58,10 +73,7 @@ class DropZone(QFrame):
             path = urls[0].toLocalFile()
             if path.lower().endswith(".pdf"):
                 self.file_dropped.emit(path)
-        self.setStyleSheet(
-            f"QFrame#dropZone {{ background: {SURFACE_2}; border: 2px dashed {BORDER_HEX}; "
-            f"border-radius: 8px; }}"
-        )
+        self._apply_idle_style()
 
     def mousePressEvent(self, e):
         path, _ = QFileDialog.getOpenFileName(self, "Select PDF", "", "PDF Files (*.pdf)")
@@ -72,6 +84,7 @@ class DropZone(QFrame):
 class UploadPanel(QWidget):
     pdf_selected = pyqtSignal(str)
     project_meta_changed = pyqtSignal(dict)
+    cost_saver_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -137,6 +150,36 @@ class UploadPanel(QWidget):
         form.addRow("Liq. Damages:", self._liq_damages)
         form.addRow("Bid Opening:", self._bid_date)
         layout.addLayout(form)
+
+        # Phase 7 — cost-saver toggle. Off by default: it adds a few minutes
+        # of latency at the end of a run in exchange for the 50% Anthropic
+        # batch discount on description-composition calls.
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"color: {BORDER_HEX};")
+        layout.addWidget(sep2)
+
+        self._cost_saver = QCheckBox("Cost-saver mode (batch · ~50% off)")
+        self._cost_saver.setToolTip(
+            "Defer description-composition calls into a single Anthropic Batch "
+            "request. Adds ~30 s–5 min of latency at the end of the run; cuts "
+            "the per-row composition spend roughly in half. Other calls are "
+            "unaffected."
+        )
+        self._cost_saver.setStyleSheet(
+            f"color: {TEXT_2}; font-size: 11px; padding: 2px 0px;"
+        )
+        self._cost_saver.toggled.connect(self.cost_saver_toggled)
+        layout.addWidget(self._cost_saver)
+
+    def set_cost_saver(self, enabled: bool) -> None:
+        """Programmatic setter — used to seed from config.yaml at startup."""
+        self._cost_saver.blockSignals(True)
+        self._cost_saver.setChecked(bool(enabled))
+        self._cost_saver.blockSignals(False)
+
+    def is_cost_saver(self) -> bool:
+        return self._cost_saver.isChecked()
 
     def _on_file(self, path: str):
         p = Path(path)

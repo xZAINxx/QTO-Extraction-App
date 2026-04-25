@@ -1,0 +1,20 @@
+key: concrete_ceiling_repair
+name: Concrete Ceiling — Repair Existing
+trade: concrete
+csi_division: DIVISION 03
+units: SQ FT
+description_template: |-
+  REPAIR EXIST. CONCRETE CEILING @ {location} AS PER {detail_ref}
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: BULKHEAD 1 & 4
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: LEGEND/A107
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

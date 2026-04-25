@@ -1,0 +1,20 @@
+key: provision_generic
+name: Provision (generic line item)
+trade: general
+csi_division: DIVISION 01
+units: LS
+description_template: |-
+  (PROVISION) {scope} AS PER {detail_ref}
+inputs:
+  - name: scope
+    label: Provision scope (verb-first, ALL CAPS)
+    type: text
+    default: REMOVE & REPLACE
+  - name: detail_ref
+    label: Detail / Provision ref
+    type: text
+    default: PROVISIONS# 1/T002
+  - name: qty
+    label: Quantity
+    type: number
+    default: 1

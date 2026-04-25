@@ -1,0 +1,21 @@
+key: three_coat_plaster_wall
+name: Three-Coat Gypsum Plaster — Wall
+trade: finishes
+csi_division: DIVISION 09
+units: SQ FT
+description_template: |-
+  REMOVE & REPLACE W/ NEW THREE COAT GYPSUM PLASTER INCLUDING METAL LATH @ {location} AS PER {detail_ref}
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: WALL
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 1/A402 & LEGEND/A102
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0
+math_trail_template: '({length}'' L X {height}'' H = {area} SQFT)'

@@ -1,0 +1,16 @@
+key: prime_paint_ceiling
+name: Prime & Paint — Ceiling
+trade: finishes
+csi_division: DIVISION 09
+units: SQ FT
+description_template: |-
+  PRIME & PAINT ENTIRE CEILING AS PER {detail_ref}
+inputs:
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 1/A402 & LEGEND/A102
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

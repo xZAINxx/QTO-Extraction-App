@@ -1,0 +1,20 @@
+key: temporary_protection
+name: Temporary Protection / Sidewalk Bridge
+trade: general
+csi_division: DIVISION 01
+units: LF
+description_template: |-
+  PROVIDE & MAINTAIN TEMPORARY PROTECTION @ {location} AS PER {detail_ref} INCLUDING SIDEWALK BRIDGE, OVERHEAD PLANK, GUARD RAILS & SIGNAGE
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: SIDEWALK PERIMETER
+  - name: detail_ref
+    label: Detail / Note ref
+    type: text
+    default: GENERAL NOTES
+  - name: qty
+    label: Quantity (LF)
+    type: number
+    default: 0

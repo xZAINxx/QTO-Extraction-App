@@ -1,0 +1,24 @@
+key: window_replacement
+name: Window — Remove & Replace
+trade: openings
+csi_division: DIVISION 08
+units: EA
+description_template: |-
+  REMOVE & REPLACE W/ NEW WINDOW UNIT @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -ALUM. FRAME W/ THERMAL BREAK
+  -INSULATING GLAZING (LOW-E)
+  -PERIMETER SEALANT & BACKER ROD
+  -INTERIOR & EXTERIOR TRIM
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: ELEVATION
+  - name: detail_ref
+    label: Detail / Schedule ref
+    type: text
+    default: WINDOW SCHEDULE/A901
+  - name: qty
+    label: Quantity (EA)
+    type: number
+    default: 1

@@ -1,0 +1,20 @@
+key: scaffolding
+name: Scaffolding (perimeter, exterior)
+trade: general
+csi_division: DIVISION 01
+units: SQ FT
+description_template: |-
+  PROVIDE & MAINTAIN PERIMETER SCAFFOLDING @ {location} AS PER {detail_ref} INCLUDING ERECT, RENT, DISMANTLE, INSURANCE & SAFETY NETTING
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: ALL FACADES
+  - name: detail_ref
+    label: Detail / Note ref
+    type: text
+    default: GENERAL NOTES
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

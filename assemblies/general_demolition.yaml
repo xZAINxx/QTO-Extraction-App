@@ -1,0 +1,24 @@
+key: general_demolition
+name: General Demolition (catch-all)
+trade: demolition
+csi_division: DIVISION 02
+units: SQ FT
+description_template: |-
+  REMOVE & DISPOSE OF EXISTING {scope} @ {location} AS PER {detail_ref}
+inputs:
+  - name: scope
+    label: Scope (e.g. CMU WALL, FLOORING, CEILING)
+    type: text
+    default: PARTITION
+  - name: location
+    label: Location
+    type: text
+    default: GENERAL
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DEMO PLAN/A101
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0

@@ -1,0 +1,23 @@
+key: door_replacement
+name: Door — Remove & Replace
+trade: openings
+csi_division: DIVISION 08
+units: EA
+description_template: |-
+  REMOVE & REPLACE W/ NEW DOOR ASSEMBLY @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -HOLLOW METAL DOOR & FRAME
+  -COMMERCIAL HARDWARE SET (LOCKSET, CLOSER, HINGES, SILENCER)
+  -PAINT FINISH MATCH EXIST.
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: CORRIDOR
+  - name: detail_ref
+    label: Detail / Schedule ref
+    type: text
+    default: DOOR SCHEDULE/A902
+  - name: qty
+    label: Quantity (EA)
+    type: number
+    default: 1

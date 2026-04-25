@@ -1,0 +1,25 @@
+key: cap_flashing
+name: Cap Flashing (Cleat / Lock-Slot)
+trade: roofing
+csi_division: DIVISION 07
+units: LF
+description_template: |-
+  REMOVE & REPLACE CAP FLASHING @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -LOCK SLOT FASTEN 24" O.C.
+  -2' WIDE CLEATS @ 32" O.C.
+  -RECEIVER LOCK
+  -FASTEN VENT BASE SHEET @ 24" O.C.
+  -2-PLY SBS MODIFIED/REINFORCED BITUMEN BUILT-UP FLASHING
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: PARAPET
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 2A/A422
+  - name: qty
+    label: Quantity (LF)
+    type: number
+    default: 0

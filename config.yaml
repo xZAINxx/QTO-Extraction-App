@@ -4,6 +4,21 @@ anthropic_api_key: ""
 model: "claude-sonnet-4-6"
 max_tokens_per_page_call: 8000
 
+models:
+  haiku:  "claude-haiku-4-5-20251001"
+  sonnet: "claude-sonnet-4-6"
+  opus:   "claude-opus-4-5"
+
+cost_saver_mode: false   # Phase 7: route 24-hour-tolerant calls to messages.batches
+references_dir: "./QTO Tool"
+
+# Phase 2: local CV layer. Disabled gracefully if ultralytics or weights missing.
+cv:
+  enabled: true
+  weights: "./cv/weights/floorplancad_general.pt"
+  conf_threshold: 0.35
+  classes: null   # null = detect all known symbols; e.g. ["door","window","drain"]
+
 title_block_region:
   side: right
   pct: 0.15

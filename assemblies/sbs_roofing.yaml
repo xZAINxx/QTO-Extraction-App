@@ -1,0 +1,25 @@
+key: sbs_roofing
+name: SBS Modified Roofing — Cold-Applied
+trade: roofing
+csi_division: DIVISION 07
+units: SQ FT
+description_template: |-
+  REMOVE & REPLACE W/ COLD-APPLIED SBS MODIFIED ROOFING @ {location} AS PER {detail_ref} WHICH INCLUDES
+  -1 PLY SBS MODIFIED BITUMEN VAPOR BARRIER
+  -2-PLY SBS MODIFIED BITUMEN ROOFING MEMBRANE
+  -MULTI-LAYER INSULATION W/ COMPOSITE BOARD MIN. R VALUE=40
+  -VENT BASE SHEET W/ FASTNERS 18" O.C.
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: ROOF
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 2B/A422
+  - name: qty
+    label: Quantity (SQ FT)
+    type: number
+    default: 0
+math_trail_template: '({length}'' L X {height}'' H = {area} SQFT)'

@@ -30,7 +30,7 @@ def test_sheet_normalization_no_suffix():
 # ── Description normalizer examples ─────────────────────────────────────────
 
 def test_description_examples():
-    from ai.description_normalizer import _SYSTEM
+    from ai.description_composer import _SYSTEM
     # Real reference examples must be present
     assert "MAPLE FLOORING (25/32\" T)" in _SYSTEM
     assert "SBS MODIFIED" in _SYSTEM
@@ -45,14 +45,14 @@ def test_description_examples():
 
 
 def test_description_examples_count():
-    from ai.description_normalizer import _SYSTEM
+    from ai.description_composer import _SYSTEM
     # Count Input:/Output: pairs — must have at least 15 examples
     input_count = _SYSTEM.count("\nInput:")
     assert input_count >= 15, f"Only {input_count} examples found; need ≥15"
 
 
 def test_description_no_invented_examples():
-    from ai.description_normalizer import _SYSTEM
+    from ai.description_composer import _SYSTEM
     # Original 8 invented examples must not appear
     invented = [
         "Remove and replace brick veneer at parapet, approx 15LF",

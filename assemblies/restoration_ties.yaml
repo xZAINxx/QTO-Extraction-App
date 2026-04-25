@@ -1,0 +1,20 @@
+key: restoration_ties
+name: Restoration Ties (S.S., 16" O.C.)
+trade: masonry
+csi_division: DIVISION 04
+units: EA
+description_template: |-
+  PROVIDE & INSTALL 8 MM S.S. FLEXIBLE RESTORATION TIES @ 16" O.C. @ {location} AS PER {detail_ref}
+inputs:
+  - name: location
+    label: Location
+    type: text
+    default: FACADE
+  - name: detail_ref
+    label: Detail / Legend ref
+    type: text
+    default: DETAIL 1/A401
+  - name: qty
+    label: Quantity (EA)
+    type: number
+    default: 0

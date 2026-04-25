@@ -29,6 +29,7 @@ _TEXT_3_COLOR = QColor(TEXT_3)
 
 class ResultsTable(QWidget):
     row_jump_requested = pyqtSignal(int, str)   # (page_num, source_sheet)
+    save_as_assembly_requested = pyqtSignal(int)   # row index in self._rows
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -278,11 +279,13 @@ class ResultsTable(QWidget):
         add_act = QAction("Add Row Below", menu)
         review_act = QAction("Mark as Reviewed", menu)
         jump_act = QAction(f"Jump to PDF Page {row.source_page}", menu)
+        save_assembly_act = QAction("Save as Assembly…", menu)
 
         delete_act.triggered.connect(lambda: self._delete_row(idx))
         add_act.triggered.connect(lambda: self._add_row_below(idx))
         review_act.triggered.connect(lambda: self._mark_reviewed(idx))
         jump_act.triggered.connect(lambda: self.row_jump_requested.emit(row.source_page, row.source_sheet))
+        save_assembly_act.triggered.connect(lambda: self.save_as_assembly_requested.emit(idx))
 
         if not row.is_header_row:
             menu.addAction(delete_act)
@@ -291,6 +294,8 @@ class ResultsTable(QWidget):
             menu.addAction(review_act)
         if row.source_page:
             menu.addAction(jump_act)
+        if not row.is_header_row:
+            menu.addAction(save_assembly_act)
 
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
@@ -309,3 +314,22 @@ class ResultsTable(QWidget):
 
     def get_rows(self) -> list[QTORow]:
         return self._rows
+
+    def selected_data_row(self) -> Optional[QTORow]:
+        """Return the currently-selected non-header row, or ``None``."""
+        items = self._table.selectedItems()
+        if not items:
+            return None
+        for item in items:
+            idx = item.data(Qt.ItemDataRole.UserRole)
+            if idx is None:
+                continue
+            row = self._rows[idx]
+            if not row.is_header_row:
+                return row
+        return None
+
+    def row_at_index(self, idx: int) -> Optional[QTORow]:
+        if 0 <= idx < len(self._rows):
+            return self._rows[idx]
+        return None
