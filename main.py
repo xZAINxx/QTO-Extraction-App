@@ -46,7 +46,10 @@ def main():
     app.setOrganizationName("Zeconic")
     config = load_config()
 
-    from ui.main_window import MainWindow
+    if config.get("ui_v2", False):
+        from ui.views.main_window import MainWindow
+    else:
+        from ui.main_window import MainWindow
     window = MainWindow(config, str(APP_DIR))
     window.show()
 
