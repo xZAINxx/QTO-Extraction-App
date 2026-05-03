@@ -137,6 +137,10 @@ class PDFGraphicsView(QGraphicsView):
         self._scale = 1.0
         self._capture_mode = False
         self._marquee_origin: Optional[QPointF] = None
+        # Track movement without a held button so detail-callout hover
+        # detection fires as the cursor passes over a callout.
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
 
     # ── Capture mode ─────────────────────────────────────────────────────
 
@@ -200,6 +204,12 @@ class PDFGraphicsView(QGraphicsView):
             self._scene.update_marquee(QRectF(self._marquee_origin, cur))
             event.accept()
             return
+        # Forward hover-tracking to the owning PDFViewer so the detail
+        # callout popup can light up under the cursor (no-op if no
+        # callouts are registered for the current page).
+        owner = self.parent()
+        if owner is not None and hasattr(owner, "_handle_callout_hover"):
+            owner._handle_callout_hover(self.mapToScene(event.pos()), event.globalPosition().toPoint())
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
@@ -217,7 +227,19 @@ class PDFGraphicsView(QGraphicsView):
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton and not self._capture_mode:
-            self.page_clicked.emit(self.mapToScene(event.pos()))
+            scene_point = self.mapToScene(event.pos())
+            owner = self.parent()
+            # Detail callouts get first crack — if the click hit one with
+            # a known target page, swallow the event so we don't also fire
+            # the row-lookup ``page_clicked`` path.
+            if (
+                owner is not None
+                and hasattr(owner, "_handle_callout_click")
+                and owner._handle_callout_click(scene_point)
+            ):
+                event.accept()
+                return
+            self.page_clicked.emit(scene_point)
         super().mouseReleaseEvent(event)
 
 
@@ -227,6 +249,7 @@ class PDFViewer(QWidget):
     region_captured = pyqtSignal(object)   # CapturedRegion
     page_changed = pyqtSignal(int)          # 1-indexed page
     region_clicked = pyqtSignal(int, tuple)  # (page_num, pdf_bbox) on plain LMB click
+    detail_jump_requested = pyqtSignal(int)  # 1-indexed target page from a callout click
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -244,6 +267,13 @@ class PDFViewer(QWidget):
         self._pulse_anim = None  # type: ignore[assignment]
         self._zone_items: list[QGraphicsRectItem] = []
         self.zone_overlay_visible: bool = False
+
+        # Detail-callout state — see "Detail callout previews" section at
+        # the bottom of this module. Populated lazily by MainWindow as
+        # pages scroll into view via parser.callout_detector.detect_callouts.
+        self._detail_callouts: dict[int, list[tuple[QRectF, str, int]]] = {}
+        self._callout_popup: Optional[QFrame] = None
+        self._hovered_callout_key: Optional[tuple[int, int]] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -607,3 +637,106 @@ class PDFViewer(QWidget):
             return
         item.setZValue(5)  # below pulse highlight (15) and marquee (20)
         self._zone_items.append(item)
+
+    # ── Detail callout previews ──────────────────────────────────────────
+    #
+    # Wave 6 commit 12 (dapper-pebble plan section "6. Phase 2 features",
+    # row #12). Architectural drawings reference details via callouts like
+    # ``4/A-501`` (Detail 4 on Sheet A-501). MainWindow runs
+    # ``parser.callout_detector.detect_callouts`` on the active page and
+    # registers the results here via ``set_detail_callouts``. Hover →
+    # tooltip popup; click → ``detail_jump_requested`` signal.
+
+    def set_detail_callouts(
+        self,
+        page_num: int,
+        callouts: list[tuple[QRectF, str, int]],
+    ) -> None:
+        """Register clickable callouts for ``page_num``.
+
+        Each entry is ``(scene_rect, callout_text, target_page_num)``;
+        ``target_page_num == 0`` means the destination is unknown (no
+        sheet match) — hover still works but click is a no-op.
+        """
+        self._detail_callouts[page_num] = list(callouts)
+
+    def _handle_callout_hover(self, scene_point: QPointF, global_pos) -> None:
+        hit = self._callout_hit_test(scene_point)
+        if hit is None:
+            self._hide_callout_popup()
+            return
+        idx, (_rect, text, target) = hit
+        key = (self._page_num, idx)
+        if key == self._hovered_callout_key:
+            return
+        self._hovered_callout_key = key
+        self._show_callout_popup(text, target, global_pos)
+
+    def _handle_callout_click(self, scene_point: QPointF) -> bool:
+        hit = self._callout_hit_test(scene_point)
+        if hit is None:
+            return False
+        _idx, (_rect, _text, target) = hit
+        if target > 0:
+            self._hide_callout_popup()
+            self.detail_jump_requested.emit(int(target))
+            return True
+        return False
+
+    def _callout_hit_test(self, scene_point: QPointF):
+        callouts = self._detail_callouts.get(self._page_num)
+        if not callouts:
+            return None
+        for idx, entry in enumerate(callouts):
+            rect = entry[0]
+            if rect.contains(scene_point):
+                return idx, entry
+        return None
+
+    def _show_callout_popup(self, text: str, target_page: int, global_pos) -> None:
+        if self._callout_popup is None:
+            popup = QFrame(self, Qt.WindowType.ToolTip)
+            popup.setObjectName("calloutPopup")
+            popup.setStyleSheet(
+                f"#calloutPopup {{ background: {SURFACE_2}; "
+                f"border: 1px solid {BORDER_HEX}; border-radius: 6px; }} "
+                f"QLabel {{ color: {TEXT_1}; padding: 4px 8px; }}"
+            )
+            lay = QVBoxLayout(popup)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+            popup._title = QLabel("", popup)  # type: ignore[attr-defined]
+            popup._title.setStyleSheet(  # type: ignore[attr-defined]
+                f"font-weight: 600; color: {TEXT_1}; padding: 6px 10px 2px;"
+            )
+            popup._jump = QPushButton("Jump to sheet", popup)  # type: ignore[attr-defined]
+            popup._jump.setEnabled(False)  # type: ignore[attr-defined]
+            popup._target = 0  # type: ignore[attr-defined]
+            popup._jump.clicked.connect(  # type: ignore[attr-defined]
+                lambda: self._on_popup_jump_clicked()
+            )
+            lay.addWidget(popup._title)  # type: ignore[attr-defined]
+            lay.addWidget(popup._jump)  # type: ignore[attr-defined]
+            popup.setFixedWidth(180)
+            self._callout_popup = popup
+        self._callout_popup._title.setText(text)  # type: ignore[attr-defined]
+        self._callout_popup._target = int(target_page)  # type: ignore[attr-defined]
+        self._callout_popup._jump.setEnabled(target_page > 0)  # type: ignore[attr-defined]
+        try:
+            self._callout_popup.move(global_pos + QPoint(14, 14))
+        except TypeError:
+            pass
+        self._callout_popup.show()
+
+    def _on_popup_jump_clicked(self) -> None:
+        if self._callout_popup is None:
+            return
+        target = int(getattr(self._callout_popup, "_target", 0))
+        self._hide_callout_popup()
+        if target > 0:
+            self.detail_jump_requested.emit(target)
+
+    def _hide_callout_popup(self) -> None:
+        self._hovered_callout_key = None
+        if self._callout_popup is not None and self._callout_popup.isVisible():
+            self._callout_popup.hide()

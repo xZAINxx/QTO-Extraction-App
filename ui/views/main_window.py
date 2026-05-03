@@ -446,7 +446,75 @@ class MainWindow(QMainWindow):
         )
         if hasattr(viewer, "region_clicked"):
             viewer.region_clicked.connect(self._trace_link.jump_to_row)
+        # Wave 6 commit 12 — wire the detail-callout pipeline. Lazy
+        # detection per page on page_changed (no upfront cost on PDF
+        # load); jump signal routes through the same handler row jumps use.
+        if hasattr(viewer, "detail_jump_requested"):
+            viewer.detail_jump_requested.connect(self._on_detail_jump_requested)
+        if hasattr(viewer, "page_changed"):
+            viewer.page_changed.connect(self._on_pdf_page_changed)
         return self._trace_link
+
+    def _on_pdf_page_changed(self, page_num: int) -> None:
+        """Run callout detection lazily for the page the user just opened."""
+        if page_num <= 0:
+            return
+        viewer = self._takeoff.pdf_viewer
+        if viewer is None or not hasattr(viewer, "set_detail_callouts"):
+            return
+        # Skip if we've already populated this page (cheap dict membership).
+        cache = getattr(viewer, "_detail_callouts", None)
+        if isinstance(cache, dict) and page_num in cache:
+            return
+        try:
+            from parser.callout_detector import detect_callouts
+            doc = getattr(viewer, "_doc", None)
+            if doc is None or page_num > doc.page_count:
+                return
+            page = doc[page_num - 1]
+            raw = detect_callouts(page)
+        except Exception:
+            return
+        # Translate PDF-space rects into scene rects + map sheet_id → page.
+        sheet_to_page = self._sheet_id_to_page_map()
+        try:
+            from PyQt6.QtCore import QRectF
+        except Exception:
+            return
+        callouts: list = []
+        for rect, text, sheet_id in raw:
+            try:
+                scene_rect = viewer._pdf_to_scene_rect(rect)
+            except Exception:
+                scene_rect = QRectF(rect.x0, rect.y0, rect.width, rect.height)
+            target = sheet_to_page.get(sheet_id, 0)
+            if not target:
+                # Try the no-dash variant (e.g. 'A501' → 'A-501').
+                target = sheet_to_page.get(sheet_id.replace("-", ""), 0)
+            callouts.append((scene_rect, text, int(target)))
+        viewer.set_detail_callouts(page_num, callouts)
+
+    def _sheet_id_to_page_map(self) -> dict[str, int]:
+        """Build {sheet_number: page_num} from the SheetRail metadata."""
+        out: dict[str, int] = {}
+        try:
+            for sheet_row in getattr(self._sheet_rail, "_rows", []):
+                meta = getattr(sheet_row, "meta", None)
+                if meta is None:
+                    continue
+                num = (getattr(meta, "sheet_number", "") or "").strip()
+                if not num:
+                    continue
+                out[num] = int(getattr(meta, "page_num", 0) or 0)
+                # Index the no-dash form too, so '4/A501' finds 'A-501'.
+                out.setdefault(num.replace("-", ""), int(getattr(meta, "page_num", 0) or 0))
+        except Exception:
+            pass
+        return out
+
+    def _on_detail_jump_requested(self, page_num: int) -> None:
+        """Route a callout-bubble click to the same handler used elsewhere."""
+        self._on_row_jump_requested(int(page_num), "")
 
     # ------------------------------------------------------------------
     # Slots

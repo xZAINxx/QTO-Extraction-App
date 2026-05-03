@@ -1,9 +1,23 @@
-"""Main application window — dark theme, sidebar + main area layout."""
+"""[DEPRECATED] Legacy MainWindow used when ``ui_v2: false`` in config.yaml.
+
+This module and the legacy UI panels it imports (``ui/results_table.py``,
+``ui/upload_panel.py``, ``ui/cost_meter.py``, etc.) are slated for removal
+in a future release. The replacement is ``ui/views/main_window.py``.
+New work should go into the new UI.
+"""
 import os
+import warnings
 from pathlib import Path
 from typing import Optional
 
 import fitz
+
+warnings.warn(
+    "ui.main_window (legacy) is deprecated; set ui_v2: true in config.yaml "
+    "to use the new modern UI.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QSplitter, QFrame, QFileDialog, QMessageBox,
