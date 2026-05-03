@@ -23,6 +23,28 @@ from typing import TYPE_CHECKING
 
 from .fonts import FontLoadResult, load_fonts
 from .icons import clear_cache as clear_icon_cache, icon
+from .legacy import (
+    AMBER,
+    BORDER_1,
+    BORDER_HEX,
+    CANVAS,
+    EMERALD,
+    FONT_BODY,
+    FONT_MONO,
+    INDIGO,
+    PURPLE,
+    RED,
+    SECTION_BG,
+    SIDEBAR_WIDTH,
+    STYLESHEET,
+    SURFACE_1,
+    SURFACE_2,
+    SURFACE_3,
+    SURFACE_4,
+    TEXT_1,
+    TEXT_2,
+    TEXT_3,
+)
 from .motion import Animator
 from .qss import build_stylesheet
 from .tokens import DARK, LIGHT, get_mode, set_mode, tokens
@@ -57,4 +79,25 @@ __all__ = [
     "load_fonts",
     "set_mode",
     "tokens",
+    # Legacy re-exports — kept for ui_v2=False compatibility. Removed in commit 12.
+    "AMBER",
+    "BORDER_1",
+    "BORDER_HEX",
+    "CANVAS",
+    "EMERALD",
+    "FONT_BODY",
+    "FONT_MONO",
+    "INDIGO",
+    "PURPLE",
+    "RED",
+    "SECTION_BG",
+    "SIDEBAR_WIDTH",
+    "STYLESHEET",
+    "SURFACE_1",
+    "SURFACE_2",
+    "SURFACE_3",
+    "SURFACE_4",
+    "TEXT_1",
+    "TEXT_2",
+    "TEXT_3",
 ]
