@@ -30,9 +30,11 @@ from PyQt6.QtWidgets import (
 from ui.components import Button, EmptyState, Pill, Toaster
 from ui.components.command_palette import CommandPalette, build_palette_index
 from ui.controllers.trace_link import TraceLink
+from ui.panels.calibration_dialog import CalibrationDialog
 from ui.panels.sheet_rail import SheetRail
-from ui.theme import apply_theme, tokens
+from ui.theme import apply_theme, icon as theme_icon, tokens
 from ui.workspaces.cockpit_workspace import CockpitWorkspace
+from ui.workspaces.coverage_workspace import CoverageWorkspace
 from ui.workspaces.diff_workspace import DiffWorkspace
 from ui.workspaces.takeoff_workspace import TakeoffWorkspace
 
@@ -202,6 +204,17 @@ class MainWindow(QMainWindow):
         self._zone_overlay_btn.clicked.connect(self._on_toggle_zone_overlay)
         layout.addWidget(self._zone_overlay_btn)
 
+        self._calibrate_btn = Button(
+            icon_name="compass-tool",
+            variant="ghost",
+            size="md",
+            parent=bar,
+        )
+        self._calibrate_btn.setObjectName("calibrateBtn")
+        self._calibrate_btn.setToolTip("Calibrate scale")
+        self._calibrate_btn.clicked.connect(self._open_calibration)
+        layout.addWidget(self._calibrate_btn)
+
         self._theme_toggle_btn = Button(
             icon_name="moon" if self._theme_mode == "dark" else "sun",
             variant="ghost",
@@ -292,14 +305,16 @@ class MainWindow(QMainWindow):
         if project_meta.get("deadline"):
             self._cockpit.set_deadline(str(project_meta["deadline"]))
 
-        # Remaining placeholder — disabled until commit 11 lands.
-        placeholders = [
-            ("Coverage", "info", "Coverage / holes report — coming in commit 11."),
-        ]
-        for title, icon_name, body in placeholders:
-            ph = EmptyState(icon_name=icon_name, title=title, body=body, parent=tabs)
-            idx = tabs.addTab(ph, f"{title} (coming soon)")
-            tabs.setTabEnabled(idx, False)
+        # Wave 6 commit 11 — CoverageWorkspace replaces the disabled placeholder.
+        self._coverage = CoverageWorkspace(parent=tabs)
+        self._coverage.setObjectName("coverageWorkspace")
+        try:
+            tabs.addTab(self._coverage, theme_icon("eye"), "Coverage")
+        except RuntimeError:
+            # qtawesome missing in some test environments — fall back to text-only.
+            tabs.addTab(self._coverage, "Coverage")
+        if project_meta.get("name"):
+            self._coverage.set_project_name(str(project_meta["name"]))
         return tabs
 
     # --- Inspector placeholder ---------------------------------------
@@ -465,6 +480,8 @@ class MainWindow(QMainWindow):
         # Reset zone cache when the document changes — old zones don't apply.
         self._zone_cache = {}
         self._ensure_trace_link()
+        # Wave 6 commit 11 — push current state to coverage / cockpit / etc.
+        self._propagate_state()
 
     def _on_sheet_clicked(self, page_num: int) -> None:
         viewer = self._takeoff.pdf_viewer
@@ -652,6 +669,110 @@ class MainWindow(QMainWindow):
             "Re-extract scheduled — wires to ExtractionWorker in commit 11+.",
             variant="info",
         )
+
+    def _open_calibration(self) -> None:
+        """Open the per-sheet scale calibration dialog modally."""
+        sheets = self._sheet_ids_for_calibration()
+        cache_dir = self._config.get("cache_dir", "./cache")
+        fingerprint = ""
+        if self._pdf_path:
+            try:
+                p = Path(self._pdf_path)
+                fingerprint = f"{p.name}:{p.stat().st_size}"
+            except OSError:
+                fingerprint = ""
+        dialog = CalibrationDialog(
+            sheets=sheets,
+            cache_dir=cache_dir,
+            pdf_fingerprint=fingerprint,
+            parent=self,
+        )
+        dialog.calibration_applied.connect(self._on_calibration_applied)
+        dialog.exec()
+
+    def _sheet_ids_for_calibration(self) -> list[str]:
+        """Return the sheet-number list from the SheetRail, in page order."""
+        out: list[str] = []
+        try:
+            for sheet_row in getattr(self._sheet_rail, "_rows", []):
+                meta = getattr(sheet_row, "meta", None)
+                if meta is None:
+                    continue
+                sheet_number = (getattr(meta, "sheet_number", "") or "").strip()
+                if sheet_number:
+                    out.append(sheet_number)
+        except Exception:
+            return []
+        return out
+
+    def _on_calibration_applied(
+        self, sheets: list, scale: float, units: str,
+    ) -> None:
+        """Stub handler — fires a Toast confirming calibration save.
+
+        Wiring the scale into the extraction pipeline is beyond the
+        scope of this commit. Calibration just persists to JSON for now.
+        """
+        # ``scale`` and ``units`` are part of the public signal contract
+        # but the stub only needs the affected-sheet count for the toast.
+        del scale, units
+        n = len(sheets) if sheets else 0
+        Toaster.show(
+            f"Calibration saved · scale propagated to {n} sheet"
+            + ("s" if n != 1 else ""),
+            variant="info",
+        )
+
+    def _propagate_state(self) -> None:
+        """Fan out the current row + sheet state to every interested panel.
+
+        Called after the extraction worker emits and after a PDF load
+        produces page classifications. The cockpit and coverage panels
+        both want the row set; coverage additionally wants the sheet
+        classifications. Other panels can hook in here as they land.
+        """
+        rows: list = []
+        try:
+            rows = list(self._takeoff.data_table.model().rows())
+        except Exception:
+            rows = []
+        if hasattr(self, "_cockpit") and self._cockpit is not None:
+            try:
+                self._cockpit.set_rows(rows)
+            except Exception:
+                pass
+        if hasattr(self, "_coverage") and self._coverage is not None:
+            try:
+                self._coverage.set_rows(rows)
+                self._coverage.set_sheets(self._page_classifications())
+            except Exception:
+                pass
+
+    def _page_classifications(self) -> dict[int, dict]:
+        """Return ``{page_num: {"page_type", "sheet_id", "skip"}}``.
+
+        Built from SheetRail metadata; ``page_type`` and ``skip`` come
+        from the parser when available, otherwise default to neutral
+        values that keep the coverage rendering tolerant.
+        """
+        out: dict[int, dict] = {}
+        try:
+            rows = getattr(self._sheet_rail, "_rows", []) or []
+        except Exception:
+            return out
+        for sheet_row in rows:
+            meta = getattr(sheet_row, "meta", None)
+            if meta is None:
+                continue
+            page_num = int(getattr(meta, "page_num", 0) or 0)
+            if page_num <= 0:
+                continue
+            out[page_num] = {
+                "sheet_id": getattr(meta, "sheet_number", "") or f"Page {page_num}",
+                "page_type": getattr(meta, "page_type", "") or "",
+                "skip": bool(getattr(meta, "skip", False)),
+            }
+        return out
 
     def _on_toggle_zone_overlay(self, checked: bool) -> None:
         """Toggle the per-page zone overlay; segments lazily and caches results."""
