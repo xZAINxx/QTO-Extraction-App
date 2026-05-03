@@ -48,9 +48,10 @@ def main():
 
     if config.get("ui_v2", False):
         from ui.views.main_window import MainWindow
+        window = MainWindow(config)
     else:
         from ui.main_window import MainWindow
-    window = MainWindow(config, str(APP_DIR))
+        window = MainWindow(config, str(APP_DIR))
     window.show()
 
     sys.exit(app.exec())
