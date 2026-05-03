@@ -142,8 +142,10 @@ def test_table_model_row_count_matches_input(qapp, sample_rows) -> None:
 
 
 def test_table_model_has_nine_columns(qapp) -> None:
+    # Updated for commit 10: a tenth column (RISK) joins STATUS at the end
+    # of the table. Test name retained for git-blame continuity.
     model = QtoTableModel([])
-    assert model.columnCount() == 9
+    assert model.columnCount() == 10
 
 
 def test_table_model_status_column_header(qapp) -> None:

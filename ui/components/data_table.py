@@ -4,21 +4,21 @@ Wave 2 commit 5 of the dapper-pebble plan. Replaces the legacy
 ``ui/results_table.py`` (``QTableWidget``-based) with a model/view stack
 that virtualizes 10k+ rows without losing the existing row interactions.
 
-Public surface
---------------
+Phase 2 commit 10 adds drag-drop trade-division reclassification (model
+overrides + ``rows_reclassified`` signal) and a RISK column at index 9
+that paints one pill per entry in ``QTORow.risk_flags``.
 
-* :class:`QtoTableModel`        — 9-column model over ``list[QTORow]``.
-* :class:`StatusPillDelegate`   — paint-only StatusPill renderer for column 8.
-* :class:`QtoDataTable`         — composite widget with filter bar, empty state,
-  Y-key shortcut for yellow-confirm, and the public signal API consumed by
-  the takeoff workspace.
+Public surface: :class:`QtoTableModel`, :class:`StatusPillDelegate`,
+:class:`RiskFlagsDelegate`, :class:`QtoDataTable`.
 """
 from __future__ import annotations
 
+import json
 from typing import Iterable
 
 from PyQt6.QtCore import (
     QAbstractTableModel,
+    QMimeData,
     QModelIndex,
     QRect,
     QSortFilterProxyModel,
@@ -70,6 +70,7 @@ COL_UNITS = 5
 COL_UNIT_PRICE = 6
 COL_TOTAL = 7
 COL_STATUS = 8
+COL_RISK = 9
 
 _COLUMNS: tuple[str, ...] = (
     "S.NO",
@@ -81,6 +82,7 @@ _COLUMNS: tuple[str, ...] = (
     "UNIT PRICE",
     "TOTAL",
     "STATUS",
+    "RISK",
 )
 
 _EDITABLE_COLUMNS: frozenset[int] = frozenset(
@@ -91,10 +93,13 @@ _NUMERIC_COLUMNS: frozenset[int] = frozenset(
 )
 
 # Custom roles — well above Qt.UserRole to avoid collision with built-ins.
+# UserRole+4 is already taken by ROW_OBJECT_ROLE (commit 5); RISK_FLAGS_ROLE
+# claims +5 to keep the linear allocation pattern.
 STATUS_ROLE: int = Qt.ItemDataRole.UserRole + 1
 BBOX_ROLE: int = Qt.ItemDataRole.UserRole + 2
 PAGE_ROLE: int = Qt.ItemDataRole.UserRole + 3
 ROW_OBJECT_ROLE: int = Qt.ItemDataRole.UserRole + 4
+RISK_FLAGS_ROLE: int = Qt.ItemDataRole.UserRole + 5
 
 # Column widths (px) for the view. STRETCH_COLUMN gets every leftover px.
 _COLUMN_WIDTHS: dict[int, int] = {
@@ -107,9 +112,28 @@ _COLUMN_WIDTHS: dict[int, int] = {
     COL_UNIT_PRICE: 90,
     COL_TOTAL: 90,
     COL_STATUS: 140,
+    COL_RISK: 120,
 }
 STRETCH_COLUMN = COL_DESCRIPTION
 _ROW_HEIGHT_PX = 28
+
+# Risk flag taxonomy — (canonical_id, short_label, long_label, color_key).
+# Short labels paint inside the cell, long labels feed tooltips + menus,
+# color keys resolve through ``tokens["color"][...]`` for theme support.
+RISK_FLAG_TAXONOMY: tuple[tuple[str, str, str, str], ...] = (
+    ("spec_ambiguity",     "SPEC", "Spec ambiguity",              "warning"),
+    ("design_dev_drawing", "DEV",  "Design-development drawing",  "warning"),
+    ("volatile_material",  "VOL",  "Volatile material price",     "danger"),
+    ("low_qty_confidence", "LQTY", "Low quantity confidence",     "info"),
+    ("by_others",          "NIC",  "By others (not in contract)", "info"),
+)
+_RISK_FLAG_IDS: frozenset[str] = frozenset(t[0] for t in RISK_FLAG_TAXONOMY)
+_RISK_SHORT_LABEL: dict[str, str] = {t[0]: t[1] for t in RISK_FLAG_TAXONOMY}
+_RISK_LONG_LABEL: dict[str, str] = {t[0]: t[2] for t in RISK_FLAG_TAXONOMY}
+_RISK_COLOR_KEY: dict[str, str] = {t[0]: t[3] for t in RISK_FLAG_TAXONOMY}
+
+# Mime type used by the in-table drag-drop reclassification protocol.
+QTOROW_INDEX_MIME = "application/x-qtorow-indices"
 
 # Confirmed-row tint: domain yellow at ~18% alpha. We render this in the
 # delegate as well as via BackgroundRole because some Qt styles paint the
@@ -178,15 +202,17 @@ class QtoTableModel(QAbstractTableModel):
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         if not index.isValid():
-            return Qt.ItemFlag.NoItemFlags
+            # Empty area below the last row is still a drop target.
+            return Qt.ItemFlag.ItemIsDropEnabled
         base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        # Header rows in the legacy table are read-only; we mirror that.
         row = self._rows[index.row()]
         if row.is_header_row:
-            return base
+            # Headers are drop targets but never draggable.
+            return base | Qt.ItemFlag.ItemIsDropEnabled
+        drag_drop = Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
         if index.column() in _EDITABLE_COLUMNS:
-            return base | Qt.ItemFlag.ItemIsEditable
-        return base
+            return base | Qt.ItemFlag.ItemIsEditable | drag_drop
+        return base | drag_drop
 
     def data(
         self,
@@ -208,6 +234,9 @@ class QtoTableModel(QAbstractTableModel):
             return row.bbox
         if role == PAGE_ROLE:
             return int(row.source_page)
+        if role == RISK_FLAGS_ROLE:
+            # Defensive copy so a caller can't mutate the row's list in place.
+            return list(row.risk_flags or [])
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if col in _NUMERIC_COLUMNS:
                 return int(
@@ -330,6 +359,117 @@ class QtoTableModel(QAbstractTableModel):
         )
         return True
 
+    def set_trade_division(self, source_row: int, division: str) -> bool:
+        """Mutate ``trade_division`` and emit ``dataChanged`` across the row."""
+        if not (0 <= source_row < len(self._rows)):
+            return False
+        row = self._rows[source_row]
+        if (row.trade_division or "") == (division or ""):
+            return False
+        row.trade_division = division or ""
+        left = self.index(source_row, 0)
+        right = self.index(source_row, self.columnCount() - 1)
+        self.dataChanged.emit(
+            left, right, [Qt.ItemDataRole.DisplayRole, ROW_OBJECT_ROLE],
+        )
+        return True
+
+    def set_risk_flags(self, source_row: int, flags: Iterable[str]) -> bool:
+        """Replace the row's risk flags (de-duped, taxonomy-validated)."""
+        if not (0 <= source_row < len(self._rows)):
+            return False
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for flag in flags:
+            if flag in _RISK_FLAG_IDS and flag not in seen:
+                normalized.append(flag)
+                seen.add(flag)
+        row = self._rows[source_row]
+        if list(row.risk_flags or []) == normalized:
+            return False
+        row.risk_flags = normalized
+        risk = self.index(source_row, COL_RISK)
+        self.dataChanged.emit(
+            risk, risk,
+            [Qt.ItemDataRole.DisplayRole, RISK_FLAGS_ROLE, Qt.ItemDataRole.ToolTipRole],
+        )
+        return True
+
+    # --- drag-and-drop -------------------------------------------------------
+
+    rowsReclassified = pyqtSignal(list, str)
+
+    def supportedDropActions(self) -> Qt.DropAction:
+        return Qt.DropAction.MoveAction
+
+    def supportedDragActions(self) -> Qt.DropAction:
+        return Qt.DropAction.MoveAction
+
+    def mimeTypes(self) -> list[str]:
+        return [QTOROW_INDEX_MIME]
+
+    def mimeData(self, indexes) -> QMimeData:
+        # The default ``QSortFilterProxyModel.mimeData`` maps to source
+        # before reaching here, so ``index.row()`` is a source-model row.
+        rows: list[int] = []
+        seen: set[int] = set()
+        for index in indexes or []:
+            if index is None or not index.isValid():
+                continue
+            r = index.row()
+            if r in seen or not (0 <= r < len(self._rows)):
+                continue
+            seen.add(r)
+            rows.append(r)
+        rows.sort()
+        payload = QMimeData()
+        payload.setData(QTOROW_INDEX_MIME, json.dumps(rows).encode("utf-8"))
+        return payload
+
+    def dropMimeData(self, data, action, row, column, parent) -> bool:
+        if action == Qt.DropAction.IgnoreAction:
+            return True
+        if not data.hasFormat(QTOROW_INDEX_MIME):
+            return False
+        target = self._resolve_drop_target(row, parent)
+        if target is None or not (0 <= target < len(self._rows)):
+            return False
+        target_division = self._rows[target].trade_division or ""
+        try:
+            raw = bytes(data.data(QTOROW_INDEX_MIME))
+            source_indices = json.loads(raw.decode("utf-8") or "[]")
+        except (ValueError, UnicodeDecodeError):
+            return False
+        if not isinstance(source_indices, list):
+            return False
+        moved: list[int] = []
+        for src in source_indices:
+            if not isinstance(src, int) or not (0 <= src < len(self._rows)):
+                continue
+            if src == target:
+                continue
+            if self.set_trade_division(src, target_division):
+                moved.append(src)
+        if moved:
+            self.rowsReclassified.emit(moved, target_division)
+        return True
+
+    def removeRows(self, row: int, count: int, parent=QModelIndex()) -> bool:
+        # ``InternalMove`` makes Qt call removeRows post-drop. We only
+        # mutated ``trade_division``, so swallow the call.
+        return True
+
+    def _resolve_drop_target(self, row: int, parent: QModelIndex) -> int | None:
+        # Cases: drop on row (parent valid), between rows (row >= 0),
+        # or in empty space (row == -1, fallback to last).
+        if parent.isValid():
+            return parent.row()
+        if not self._rows:
+            return None
+        if row < 0:
+            return len(self._rows) - 1
+        return min(max(0, row - 1), len(self._rows) - 1)
+
     # --- helpers -------------------------------------------------------------
 
     @staticmethod
@@ -367,6 +507,15 @@ class QtoTableModel(QAbstractTableModel):
             # ever swapped out (e.g. exported to plain QTableView).
             percent = max(0, min(100, int(round(row.confidence * 100))))
             return f"{percent}%"
+        if col == COL_RISK:
+            # Same fallback rule as STATUS — the delegate paints pretty
+            # pills, but the bare DisplayRole still readable for export
+            # paths and accessibility tools.
+            if not row.risk_flags:
+                return ""
+            return ", ".join(
+                _RISK_SHORT_LABEL.get(flag, flag) for flag in row.risk_flags
+            )
         return ""
 
     @staticmethod
@@ -522,6 +671,82 @@ class StatusPillDelegate(QStyledItemDelegate):
 
 
 # ---------------------------------------------------------------------------
+# RiskFlagsDelegate — paints one short pill per entry in row.risk_flags.
+# ---------------------------------------------------------------------------
+
+
+class RiskFlagsDelegate(QStyledItemDelegate):
+    """Paints one short pill per ``QTORow.risk_flags`` entry."""
+
+    _PAD_X = 6
+    _GAP = 4
+    _RADIUS = 8
+    _PILL_HEIGHT = 16
+    _CHAR_PX = 7
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        if index.column() != COL_RISK:
+            super().paint(painter, option, index)
+            return
+
+        flags = index.data(RISK_FLAGS_ROLE) or []
+        super().paint(painter, option, index)  # cell chrome
+        if not flags:
+            return
+        cell = option.rect
+        x = cell.left() + self._PAD_X
+        y = cell.top() + cell.height() // 2 - self._PILL_HEIGHT // 2
+        right_limit = cell.right() - self._PAD_X
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for flag in flags:
+            label = _RISK_SHORT_LABEL.get(flag, "?")
+            color_key = _RISK_COLOR_KEY.get(flag, "info")
+            pill_w = max(
+                self._PILL_HEIGHT,
+                len(label) * self._CHAR_PX + 2 * self._PAD_X,
+            )
+            if x + pill_w > right_limit:
+                break  # clip extras; tooltip still lists everything
+            rect = QRect(x, y, pill_w, self._PILL_HEIGHT)
+            fg = QColor(tokens["color"][color_key])
+            bg = QColor(fg)
+            bg.setAlpha(46)
+            painter.setBrush(bg)
+            pen = QPen(fg)
+            pen.setWidth(1)
+            painter.setPen(pen)
+            painter.drawRoundedRect(rect, self._RADIUS, self._RADIUS)
+            painter.setPen(fg)
+            painter.drawText(
+                rect,
+                int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
+                label,
+            )
+            x += pill_w + self._GAP
+        painter.restore()
+
+    def helpEvent(self, event, view, option, index):
+        from PyQt6.QtWidgets import QToolTip
+        if index.column() == COL_RISK:
+            flags = index.data(RISK_FLAGS_ROLE) or []
+            if flags:
+                QToolTip.showText(
+                    event.globalPos(),
+                    "\n".join(_RISK_LONG_LABEL.get(f, f) for f in flags),
+                    view,
+                )
+                return True
+            QToolTip.hideText()
+        return super().helpEvent(event, view, option, index)
+
+
+# ---------------------------------------------------------------------------
 # Filter proxy — AND-composed multi-column filter.
 # ---------------------------------------------------------------------------
 
@@ -586,6 +811,8 @@ class QtoDataTable(QWidget):
     rows_confirmed = pyqtSignal(list)
     review_requested = pyqtSignal(int)
     reextract_requested = pyqtSignal(int)
+    # Emitted after a successful drop — (source_row_indices, new_division).
+    rows_reclassified = pyqtSignal(list, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -679,6 +906,18 @@ class QtoDataTable(QWidget):
         self._delegate.confirmRequested.connect(self._on_pill_confirm)
         self._delegate.reviewRequested.connect(self._on_pill_review)
         self._delegate.reextractRequested.connect(self.reextract_requested)
+
+        self._risk_delegate = RiskFlagsDelegate(self)
+        self._view.setItemDelegateForColumn(COL_RISK, self._risk_delegate)
+
+        # Drag-drop reclassification — model.removeRows is a no-op so the
+        # ``InternalMove`` post-drop bookkeeping doesn't actually move rows.
+        self._view.setDragEnabled(True)
+        self._view.setAcceptDrops(True)
+        self._view.setDropIndicatorShown(True)
+        self._view.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self._view.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._model.rowsReclassified.connect(self.rows_reclassified)
 
         self._stack.addWidget(self._view)
         self._stack.setCurrentIndex(0)
@@ -810,13 +1049,66 @@ class QtoDataTable(QWidget):
             act_assembly.triggered.connect(
                 lambda: self.save_as_assembly_requested.emit(source_row)
             )
+
+        # Risk flag actions operate on the selected set so an estimator
+        # can flag many rows at once.
+        if not row.is_header_row:
+            target_rows = self.selected_rows() or [source_row]
+            menu.addSeparator()
+            risk_menu = menu.addMenu("Add risk flag…")
+            for flag_id, _short, long_label, _ck in RISK_FLAG_TAXONOMY:
+                action = risk_menu.addAction(long_label)
+                action.setCheckable(True)
+                action.setChecked(all(
+                    flag_id in (self._model.row_at(r).risk_flags or [])
+                    for r in target_rows
+                ))
+                action.triggered.connect(
+                    lambda _c, fid=flag_id, rows=target_rows:
+                    self.toggle_risk_flag(rows, fid)
+                )
+            menu.addAction("Clear risk flags").triggered.connect(
+                lambda: self.clear_risk_flags(target_rows)
+            )
+
         menu.exec(self._view.viewport().mapToGlobal(pos))
+
+    # --- risk flag mutation API (public for tests + future controllers) ----
+
+    def toggle_risk_flag(self, source_rows: list[int], flag_id: str) -> None:
+        """Add ``flag_id`` to every row that lacks it; otherwise remove it
+        from every row. Mirrors the Qt menu-checkbox unanimity convention."""
+        if flag_id not in _RISK_FLAG_IDS or not source_rows:
+            return
+        all_have = all(
+            flag_id in (self._model.row_at(r).risk_flags or [])
+            for r in source_rows if 0 <= r < self._model.rowCount()
+        )
+        for source_row in source_rows:
+            if not (0 <= source_row < self._model.rowCount()):
+                continue
+            current = list(self._model.row_at(source_row).risk_flags or [])
+            if all_have and flag_id in current:
+                current.remove(flag_id)
+            elif not all_have and flag_id not in current:
+                current.append(flag_id)
+            self._model.set_risk_flags(source_row, current)
+
+    def clear_risk_flags(self, source_rows: list[int]) -> None:
+        for source_row in source_rows:
+            self._model.set_risk_flags(source_row, [])
 
 
 __all__ = [
     "BBOX_ROLE",
+    "COL_RISK",
+    "COL_STATUS",
     "PAGE_ROLE",
+    "QTOROW_INDEX_MIME",
     "ROW_OBJECT_ROLE",
+    "RISK_FLAGS_ROLE",
+    "RISK_FLAG_TAXONOMY",
+    "RiskFlagsDelegate",
     "STATUS_ROLE",
     "QtoDataTable",
     "QtoTableModel",

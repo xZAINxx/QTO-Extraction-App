@@ -31,3 +31,14 @@ class QTORow:
     # DataTable paints confirmed rows in the construction-yellow domain
     # color. Persists across sessions via ``ResultCache.save``.
     confirmed: bool = False
+    # risk_flags is a per-row taxonomy of estimator-facing risks. The
+    # DataTable's RiskFlagsDelegate (commit 10) paints one short pill per
+    # entry. Allowed values come from a fixed taxonomy:
+    #   "spec_ambiguity"      — yellow pill (warning)
+    #   "design_dev_drawing"  — amber pill (warning, design-development)
+    #   "volatile_material"   — red pill (danger)
+    #   "low_qty_confidence"  — neutral pill (info)
+    #   "by_others"           — info-slate pill (NIC, "not in contract")
+    # Persists via dataclass JSON through ``ResultCache.save``; older
+    # cached payloads round-trip with an empty list by default.
+    risk_flags: list[str] = field(default_factory=list)
