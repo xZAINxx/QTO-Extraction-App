@@ -21,6 +21,12 @@ _PRICING = {
     "claude-sonnet-4-6-20250514::batch": (1.50,  7.50,  0.15,  1.875),
     "claude-opus-4-5::batch":            (7.50, 37.50, 0.75,  9.375),
     "claude-opus-4-7::batch":            (7.50, 37.50, 0.75,  9.375),
+    # NVIDIA NIM models — free tier, zero per-token cost.
+    "nvidia/nemotron-mini-4b-instruct":            (0.0, 0.0, 0.0, 0.0),
+    "meta/llama-4-maverick-17b-128e-instruct":     (0.0, 0.0, 0.0, 0.0),
+    "mistralai/mistral-nemotron":                  (0.0, 0.0, 0.0, 0.0),
+    "nvidia/nv-embed-v1":                          (0.0, 0.0, 0.0, 0.0),
+    "nv-rerank-qa-mistral-4b:1":                   (0.0, 0.0, 0.0, 0.0),
 }
 # Fallback for unknown models — assume Sonnet pricing.
 _DEFAULT_PRICE = (3.00, 15.00, 0.30, 3.75)
@@ -136,6 +142,22 @@ class TokenTracker:
         # Fold the actual model into the cache stats too so cache-hit %
         # remains meaningful per real model.
         self._cache.record(model, usage)
+        for fn in self._listeners:
+            fn(self._usage)
+
+    def record_nvidia(self, usage, model: str):
+        """Record NVIDIA NIM usage. Usage may be dict (prompt_tokens/completion_tokens) or SimpleNamespace."""
+        from types import SimpleNamespace
+        if isinstance(usage, dict):
+            normalized = SimpleNamespace(
+                input_tokens=usage.get("prompt_tokens", usage.get("input_tokens", 0)),
+                output_tokens=usage.get("completion_tokens", usage.get("output_tokens", 0)),
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+            )
+        else:
+            normalized = usage
+        self._usage.add(normalized, model)
         for fn in self._listeners:
             fn(self._usage)
 

@@ -122,6 +122,11 @@ class CostMeter(QFrame):
                 "Hk" if "haiku" in model
                 else "Sn" if "sonnet" in model
                 else "Op" if "opus" in model
+                else "Nm" if "nemotron-mini" in model
+                else "Mn" if "mistral-nemotron" in model
+                else "Mv" if "maverick" in model
+                else "Em" if "nv-embed" in model
+                else "Rr" if "rerank" in model
                 else model[:4]
             )
             chunks.append(f"{family} {calls}·${cost:.3f}")

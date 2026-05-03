@@ -7,14 +7,17 @@ import fitz
 import pytest
 
 PDF = str(Path(__file__).parent / "fixtures" / "HBT_drawings.pdf")
+_NEEDS_PDF = pytest.mark.skipif(not Path(PDF).exists(), reason="HBT_drawings.pdf fixture missing")
 
 
+@_NEEDS_PDF
 def test_pdf_opens():
     doc = fitz.open(PDF)
     assert doc.page_count > 0
     doc.close()
 
 
+@_NEEDS_PDF
 def test_classify_pages():
     from parser.pdf_splitter import classify_page
     doc = fitz.open(PDF)
@@ -30,6 +33,7 @@ def test_classify_pages():
     assert any(t != "TITLE_PAGE" for t in classified.values())
 
 
+@_NEEDS_PDF
 def test_table_detection_page_18():
     """Page 18 has KEYED PLUMBING NOTES — should find at least one Type A table."""
     from parser.table_detector import detect_tables
@@ -41,6 +45,7 @@ def test_table_detection_page_18():
     assert len(type_a) >= 1, f"Expected Type A table on page 18, got: {[t.table_type for t in tables]}"
 
 
+@_NEEDS_PDF
 def test_table_extraction_page_18():
     """Extracted Type A rows should have non-empty descriptions."""
     from parser.table_detector import detect_tables
@@ -59,6 +64,7 @@ def test_table_extraction_page_18():
     doc.close()
 
 
+@_NEEDS_PDF
 def test_title_block_page_18():
     """Page 18 (P 140 00) title block should have sheet number."""
     from parser.title_block_reader import read_title_block
@@ -70,6 +76,7 @@ def test_title_block_page_18():
     assert info.sheet_number or info.sheet_title, f"Expected sheet number, got: {info}"
 
 
+@_NEEDS_PDF
 def test_scale_detection():
     """Most pages should return None scale (AS SHOWN / NTS)."""
     from parser.scale_detector import detect_scale
@@ -102,6 +109,7 @@ def test_qto_row_dataclass():
     assert not r.needs_review
 
 
+@_NEEDS_PDF
 def test_cache_roundtrip(tmp_path):
     from core.cache import ResultCache
     from core.qto_row import QTORow
