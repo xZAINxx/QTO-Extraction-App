@@ -121,11 +121,13 @@ def test_main_window_workspace_host_is_qtabwidget_with_takeoff_tab(qapp) -> None
         host = win.findChild(QTabWidget, "workspaceHost")
         assert host is not None
         labels = [host.tabText(i) for i in range(host.count())]
-        # First tab is the active Takeoff tab; the other three are
-        # disabled placeholders advertising upcoming workspaces.
+        # First tab is the active Takeoff tab; commit 7 promoted the Diff
+        # workspace into a live tab as well, so the only remaining
+        # placeholders are Cockpit (commit 9) and Coverage (commit 11).
         assert labels[0] == "Takeoff"
         assert host.isTabEnabled(0)
-        assert any("Diff" in lbl for lbl in labels[1:])
+        assert "What Changed" in labels[1:], labels
+        assert any("Cockpit" in lbl for lbl in labels[1:])
     finally:
         win.deleteLater()
 

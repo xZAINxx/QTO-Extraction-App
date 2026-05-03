@@ -31,6 +31,7 @@ from ui.components import Button, EmptyState, Pill, Toaster
 from ui.controllers.trace_link import TraceLink
 from ui.panels.sheet_rail import SheetRail
 from ui.theme import apply_theme, tokens
+from ui.workspaces.diff_workspace import DiffWorkspace
 from ui.workspaces.takeoff_workspace import TakeoffWorkspace
 
 
@@ -172,6 +173,17 @@ class MainWindow(QMainWindow):
         self._cmd_palette_btn.clicked.connect(self._on_command_palette)
         layout.addWidget(self._cmd_palette_btn)
 
+        self._compare_btn = Button(
+            icon_name="git-diff",
+            variant="ghost",
+            size="md",
+            parent=bar,
+        )
+        self._compare_btn.setObjectName("compareBtn")
+        self._compare_btn.setToolTip("Compare with another PDF set")
+        self._compare_btn.clicked.connect(self._on_compare_with)
+        layout.addWidget(self._compare_btn)
+
         self._zone_overlay_btn = Button(
             icon_name="frame-corners",
             variant="ghost",
@@ -257,9 +269,13 @@ class MainWindow(QMainWindow):
         self._takeoff = TakeoffWorkspace(parent=tabs)
         tabs.addTab(self._takeoff, "Takeoff")
 
-        # Placeholder tabs — disabled until commits 7 / 9 / 11 land them.
+        # Wave 5 commit 7 — DiffWorkspace replaces the disabled placeholder.
+        self._diff_workspace = DiffWorkspace(config=self._config, parent=tabs)
+        self._diff_workspace.setObjectName("diffWorkspace")
+        tabs.addTab(self._diff_workspace, "What Changed")
+
+        # Remaining placeholders — disabled until commits 9 / 11 land them.
         placeholders = [
-            ("Diff", "git-diff", "Compare two PDF sets — coming in commit 7."),
             ("Cockpit", "frame-corners", "Bid-day cockpit — coming in commit 9."),
             ("Coverage", "info", "Coverage / holes report — coming in commit 11."),
         ]
@@ -372,6 +388,7 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         self._sheet_rail.sheet_clicked.connect(self._on_sheet_clicked)
         self._takeoff.row_jump_requested.connect(self._on_row_jump_requested)
+        self._diff_workspace.rerun_requested.connect(self._on_diff_rerun)
 
     def _ensure_trace_link(self) -> Optional[TraceLink]:
         """Construct the TraceLink the first time the PDF viewer exists.
@@ -442,6 +459,30 @@ class MainWindow(QMainWindow):
         Toaster.show(
             "Run Extraction not wired in this commit — full wiring in commit 4+.",
             variant="warning",
+        )
+
+    def _on_compare_with(self) -> None:
+        """Open a file picker, then hand the chosen PDF to the diff tab."""
+        if not self._pdf_path:
+            Toaster.show("Load a PDF first.", variant="warning")
+            return
+        start_dir = str(Path(self._pdf_path).parent)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Compare with…", start_dir, "PDF (*.pdf)",
+        )
+        if not path:
+            return
+        # Surface the workspace tab and start the diff in one motion.
+        idx = self._workspace_host.indexOf(self._diff_workspace)
+        if idx >= 0:
+            self._workspace_host.setCurrentIndex(idx)
+        self._diff_workspace.open_compare(self._pdf_path, path)
+
+    def _on_diff_rerun(self, _result: object) -> None:
+        """Stub — the ExtractionWorker hookup lands in a later commit."""
+        Toaster.show(
+            "Re-extract scheduled — wires to ExtractionWorker in commit 11+.",
+            variant="info",
         )
 
     def _on_toggle_zone_overlay(self, checked: bool) -> None:
