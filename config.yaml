@@ -1,4 +1,4 @@
-extraction_mode: hybrid   # hybrid | claude_only
+extraction_mode: hybrid   # hybrid | claude_only | multi_agent
 
 anthropic_api_key: ""
 model: "claude-sonnet-4-6"
@@ -60,3 +60,60 @@ units_canonical:
   LS: LS
   CUYD: YARD
   CY: YARD
+
+# ── Multi-agent mode (Phase 8) ────────────────────────────────────────
+# When extraction_mode == "multi_agent", AIClient is replaced by
+# MultiAgentClient which dispatches to ai.agents.* using the providers
+# configured below. hybrid and claude_only modes ignore these blocks.
+
+providers:
+  anthropic:
+    api_key_env: ANTHROPIC_API_KEY
+  nvidia:
+    api_key_env: NVIDIA_API_KEY
+    chat_base_url: "https://integrate.api.nvidia.com/v1"
+    rerank_base_url: "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
+    timeout_s: 60
+
+agents:
+  page_classifier:
+    provider: nvidia
+    model: "nvidia/nemotron-mini-4b-instruct"
+    temperature: 0.0
+    max_tokens: 24
+    fast_path_heuristics: true
+  vision_extractor:
+    provider: nvidia
+    model: "meta/llama-4-maverick-17b-128e-instruct"
+    temperature: 0.0
+    max_tokens: 4000
+    fallback_provider: anthropic
+    fallback_model: "claude-sonnet-4-6"
+  text_extractor:
+    provider: nvidia
+    model: "mistralai/mistral-nemotron"
+    temperature: 0.0
+    max_tokens: 2000
+  csi_classifier:
+    provider: nvidia
+    model: "nvidia/nemotron-mini-4b-instruct"
+    temperature: 0.0
+    max_tokens: 64
+  normalizer:
+    provider: nvidia
+    model: "nvidia/nemotron-mini-4b-instruct"
+    temperature: 0.0
+    max_tokens: 512
+    use_rag_priming: true
+    rag_top_k: 5
+  orchestrator:
+    provider: anthropic
+    model: "claude-sonnet-4-6"
+    temperature: 0.0
+    max_tokens: 1500
+
+rag:
+  enabled: false
+  embedding_model: "nvidia/nv-embed-v1"
+  rerank_model: "nv-rerank-qa-mistral-4b:1"
+  store_path: "./cache/historical.db"
