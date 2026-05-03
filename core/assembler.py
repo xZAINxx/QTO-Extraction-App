@@ -323,28 +323,40 @@ class Assembler:
         return sorted_rows
 
     def flush_batched_compose(self, rows: list[QTORow], *, on_progress=None) -> int:
-        """Phase 7 — resolve queued compose calls in one batched API run.
+        """Phase 7 — resolve queued compose calls in one batched API run, and
+        Phase 8 — orchestrator review of low-confidence rows.
 
-        Only does anything when ``cost_saver_mode == True``. Returns the
-        number of rows whose description was upgraded from the raw
-        upper-case fallback to a properly composed description.
+        The batch-flush body only runs when ``cost_saver_mode == True`` and
+        there are queued compose calls. The orchestrator review runs
+        unconditionally whenever the AI client exposes
+        ``review_low_confidence_rows`` (multi-agent path), regardless of
+        cost-saver state.
+
+        Returns the number of rows whose description was upgraded from the
+        raw upper-case fallback to a properly composed description.
         """
-        if not getattr(self._ai, "cost_saver_mode", False):
-            return 0
-        if not getattr(self._ai, "pending_compose_count", 0):
-            return 0
-        self._ai.flush_pending_compose(on_progress=on_progress)
         upgraded = 0
-        for row in rows:
-            if row.is_header_row:
-                continue
-            ctx = self._compose_ctx.get(id(row))
-            if ctx is None:
-                continue
-            raw, sheet, keynote_ref = ctx
-            new_desc = self._composer.compose(raw, sheet, keynote_ref)
-            if new_desc and new_desc != row.description:
-                row.description = new_desc
-                upgraded += 1
-        self._compose_ctx.clear()
+        if getattr(self._ai, "cost_saver_mode", False) and getattr(self._ai, "pending_compose_count", 0):
+            self._ai.flush_pending_compose(on_progress=on_progress)
+            for row in rows:
+                if row.is_header_row:
+                    continue
+                ctx = self._compose_ctx.get(id(row))
+                if ctx is None:
+                    continue
+                raw, sheet, keynote_ref = ctx
+                new_desc = self._composer.compose(raw, sheet, keynote_ref)
+                if new_desc and new_desc != row.description:
+                    row.description = new_desc
+                    upgraded += 1
+            self._compose_ctx.clear()
+
+        review = getattr(self._ai, "review_low_confidence_rows", None)
+        if review is not None:
+            threshold = self._config.get("confidence_review_threshold", 0.75)
+            try:
+                review(rows, threshold)
+            except Exception:
+                # Review failures must never break the assembler return.
+                pass
         return upgraded

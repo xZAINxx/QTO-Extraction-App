@@ -85,7 +85,12 @@ class ExtractionWorker(QObject):
                 })
             tracker.on_update(_emit)
 
-            ai = AIClient(self._config, tracker)
+            mode = self._config.get("extraction_mode", "hybrid")
+            if mode == "multi_agent":
+                from ai.multi_agent_client import MultiAgentClient
+                ai = MultiAgentClient(self._config, tracker)
+            else:
+                ai = AIClient(self._config, tracker)
             assembler = Assembler(self._config, ai, tracker)
 
             all_rows: list[QTORow] = []
