@@ -226,6 +226,7 @@ class PDFViewer(QWidget):
 
     region_captured = pyqtSignal(object)   # CapturedRegion
     page_changed = pyqtSignal(int)          # 1-indexed page
+    region_clicked = pyqtSignal(int, tuple)  # (page_num, pdf_bbox) on plain LMB click
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -238,6 +239,12 @@ class PDFViewer(QWidget):
         self._page_rect: Optional[fitz.Rect] = None  # current page mediabox
         self._page_rotation: int = 0
 
+        # Trace-back / zone overlay state — see "Trace-back + zone overlays"
+        # section at the bottom of this module.
+        self._pulse_anim = None  # type: ignore[assignment]
+        self._zone_items: list[QGraphicsRectItem] = []
+        self.zone_overlay_visible: bool = False
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -246,6 +253,7 @@ class PDFViewer(QWidget):
         self._scene = _PdfScene(self)
         self._view = PDFGraphicsView(self._scene, self)
         self._view.region_captured.connect(self._on_region_captured)
+        self._view.page_clicked.connect(self._on_page_clicked)
 
         layout.addWidget(self._build_toolbar())
         layout.addWidget(self._view, 1)
@@ -435,3 +443,167 @@ class PDFViewer(QWidget):
         self.region_captured.emit(
             CapturedRegion(page_num=self._page_num, pdf_rect=clip, pixmap=qpix)
         )
+
+    # ── Trace-back + zone overlays ────────────────────────────────────────
+    #
+    # Surgical additions for Wave 4 commit 6 (dapper-pebble plan section
+    # "5. Phase 1 features", row #1: trace-back overlay; plus the addendum
+    # that surfaces ``parser.zone_segmenter`` results visibly on the canvas
+    # — Caddie-style zone mapping). Everything below this banner was added
+    # by the trace-back commit; nothing above it knows these methods exist.
+
+    _PULSE_DURATION_MS = 400
+    _PULSE_LOOPS = 3            # 3 cycles × 400ms ≈ 1200ms total
+    _PULSE_ALPHA = 89           # ~35% of 255 — confirmed-yellow at 35% alpha
+    _CLICK_BBOX_PDF_UNITS = 30  # 30×30 pdf-unit click bbox → row lookup
+
+    def _on_page_clicked(self, scene_point: QPointF) -> None:
+        """Translate a non-capture-mode left click into a small PDF bbox."""
+        if not self._doc or self._page_rect is None:
+            return
+        half = self._CLICK_BBOX_PDF_UNITS * self._render_zoom / 2.0
+        scene_rect = QRectF(
+            scene_point.x() - half,
+            scene_point.y() - half,
+            half * 2,
+            half * 2,
+        )
+        pdf_rect = self.scene_to_pdf_rect(scene_rect)
+        if pdf_rect is None:
+            return
+        bbox = (
+            float(pdf_rect.x0),
+            float(pdf_rect.y0),
+            float(pdf_rect.x1),
+            float(pdf_rect.y1),
+        )
+        self.region_clicked.emit(self._page_num, bbox)
+
+    def pulse_highlight(
+        self,
+        page_num: int,
+        pdf_rect: tuple[float, float, float, float],
+    ) -> None:
+        """Scroll to ``page_num`` and pulse a yellow highlight at ``pdf_rect``.
+
+        The fill is ``confirmed-yellow`` at 35% alpha — picked over brand
+        amber because amber is hard to see on the white-mode PDF canvas.
+        Three opacity cycles over ~1200ms then fade away (the highlight
+        item is removed when the animation finishes).
+        """
+        if not self._doc:
+            return
+        self.go_to_page(page_num)
+        if self._page_rect is None:
+            return
+        rect = fitz.Rect(*pdf_rect)
+        scene_rect = self._pdf_to_scene_rect(rect)
+
+        # Stop any prior pulse before adding the new highlight item, so the
+        # previous animation doesn't tear down the rect we just added.
+        if self._pulse_anim is not None:
+            try:
+                self._pulse_anim.stop()
+            except RuntimeError:
+                pass
+            self._pulse_anim = None
+
+        self._scene.clear_highlight()
+        from ui.theme import tokens  # local import — theme package only loaded when used
+        color = QColor(tokens["color"]["confirmed-yellow"])
+        color.setAlpha(self._PULSE_ALPHA)
+        pen = QPen(QColor(tokens["color"]["confirmed-yellow"]))
+        pen.setWidthF(2.0)
+        pen.setCosmetic(True)
+        item = self._scene.addRect(scene_rect, pen, QBrush(color))
+        if item is None:
+            return
+        item.setZValue(15)
+        self._scene._highlight_item = item  # so clear_highlight removes it
+
+        from PyQt6.QtCore import QPropertyAnimation, QAbstractAnimation
+        anim = QPropertyAnimation(self)  # parented to the viewer for lifecycle
+        anim.setTargetObject(self)
+        anim.setPropertyName(b"_pulse_alpha_property")
+        anim.setDuration(self._PULSE_DURATION_MS)
+        anim.setKeyValueAt(0.0, 0.4)
+        anim.setKeyValueAt(0.5, 0.7)
+        anim.setKeyValueAt(1.0, 0.4)
+        anim.setLoopCount(self._PULSE_LOOPS)
+
+        # Drive item-level opacity each frame via a captured closure — avoids
+        # adding a Qt property to PDFViewer just for this animation.
+        def _step(value: float, _it=item) -> None:
+            try:
+                _it.setOpacity(float(value))
+            except RuntimeError:
+                pass
+
+        anim.valueChanged.connect(lambda v: _step(v))
+        anim.finished.connect(self._scene.clear_highlight)
+        anim.finished.connect(lambda: setattr(self, "_pulse_anim", None))
+        self._pulse_anim = anim
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._view.centerOn(scene_rect.center())
+
+    def show_zone_overlay(self, page_num: int, zones) -> None:
+        """Draw faint colored rectangles for each classified zone on the page.
+
+        Surfaces the existing ``parser.zone_segmenter`` output on the canvas
+        — title block (grey), legends (mep-blue), schedules (approved-green),
+        plan_bodies (confirmed-yellow @ 8%), notes (text-secondary). Each rect
+        gets a 1px coloured border at 60% alpha so the colour reads even when
+        the fill is barely visible.
+        """
+        self.hide_zone_overlay()
+        if not self._doc or self._page_rect is None:
+            return
+        if page_num != self._page_num:
+            self.go_to_page(page_num)
+        if self._page_rect is None:
+            return
+
+        from ui.theme import tokens
+        # (zone_attr, color_hex, fill_alpha_pct)
+        spec = [
+            ("title_block", tokens["color"]["text"]["secondary"], 12),
+            ("legends", tokens["color"]["mep-blue"], 12),
+            ("schedules", tokens["color"]["approved-green"], 12),
+            ("plan_bodies", tokens["color"]["confirmed-yellow"], 8),
+            ("notes", tokens["color"]["text"]["secondary"], 12),
+        ]
+        for attr, hex_color, fill_pct in spec:
+            value = getattr(zones, attr, None)
+            if value is None:
+                continue
+            zone_list = value if isinstance(value, list) else [value]
+            for z in zone_list:
+                if z is None or getattr(z, "rect", None) is None:
+                    continue
+                self._add_zone_rect(z.rect, hex_color, fill_pct)
+        self.zone_overlay_visible = True
+
+    def hide_zone_overlay(self) -> None:
+        """Remove every zone rectangle currently drawn on the scene."""
+        for item in self._zone_items:
+            try:
+                self._scene.removeItem(item)
+            except RuntimeError:
+                pass
+        self._zone_items = []
+        self.zone_overlay_visible = False
+
+    def _add_zone_rect(self, pdf_rect, hex_color: str, fill_pct: int) -> None:
+        scene_rect = self._pdf_to_scene_rect(pdf_rect)
+        fill = QColor(hex_color)
+        fill.setAlpha(int(round(255 * fill_pct / 100.0)))
+        border = QColor(hex_color)
+        border.setAlpha(int(round(255 * 0.60)))
+        pen = QPen(border)
+        pen.setWidthF(1.0)
+        pen.setCosmetic(True)
+        item = self._scene.addRect(scene_rect, pen, QBrush(fill))
+        if item is None:
+            return
+        item.setZValue(5)  # below pulse highlight (15) and marquee (20)
+        self._zone_items.append(item)

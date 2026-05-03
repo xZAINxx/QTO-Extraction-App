@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.components import Button, EmptyState, Pill, Toaster
+from ui.controllers.trace_link import TraceLink
 from ui.panels.sheet_rail import SheetRail
 from ui.theme import apply_theme, tokens
 from ui.workspaces.takeoff_workspace import TakeoffWorkspace
@@ -73,6 +74,9 @@ class MainWindow(QMainWindow):
         self._app_dir = app_dir or str(Path(__file__).resolve().parents[2])
         self._pdf_path: Optional[str] = None
         self._theme_mode: str = "dark"
+        # TraceLink and per-page zone cache — populated lazily on first use.
+        self._trace_link: Optional[TraceLink] = None
+        self._zone_cache: dict[int, object] = {}
 
         self.setWindowTitle("Zeconic QTO")
         self.resize(1440, 900)
@@ -167,6 +171,18 @@ class MainWindow(QMainWindow):
         self._cmd_palette_btn.setObjectName("cmdPaletteBtn")
         self._cmd_palette_btn.clicked.connect(self._on_command_palette)
         layout.addWidget(self._cmd_palette_btn)
+
+        self._zone_overlay_btn = Button(
+            icon_name="frame-corners",
+            variant="ghost",
+            size="md",
+            parent=bar,
+        )
+        self._zone_overlay_btn.setObjectName("zoneOverlayBtn")
+        self._zone_overlay_btn.setToolTip("Toggle zone overlay")
+        self._zone_overlay_btn.setCheckable(True)
+        self._zone_overlay_btn.clicked.connect(self._on_toggle_zone_overlay)
+        layout.addWidget(self._zone_overlay_btn)
 
         self._theme_toggle_btn = Button(
             icon_name="moon" if self._theme_mode == "dark" else "sun",
@@ -357,6 +373,27 @@ class MainWindow(QMainWindow):
         self._sheet_rail.sheet_clicked.connect(self._on_sheet_clicked)
         self._takeoff.row_jump_requested.connect(self._on_row_jump_requested)
 
+    def _ensure_trace_link(self) -> Optional[TraceLink]:
+        """Construct the TraceLink the first time the PDF viewer exists.
+
+        The TakeoffWorkspace builds its PDFViewer lazily on the first
+        ``load_pdf`` call, so the controller can't be wired at MainWindow
+        init. Calling this from PDF-touching slots is the cleanest hook.
+        """
+        if self._trace_link is not None:
+            return self._trace_link
+        viewer = self._takeoff.pdf_viewer
+        if viewer is None:
+            return None
+        self._trace_link = TraceLink(
+            table=self._takeoff.data_table,
+            pdf_viewer=viewer,
+            parent=self,
+        )
+        if hasattr(viewer, "region_clicked"):
+            viewer.region_clicked.connect(self._trace_link.jump_to_row)
+        return self._trace_link
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
@@ -374,6 +411,9 @@ class MainWindow(QMainWindow):
         self._pdf_path = path
         self._sheet_rail.load_pdf(path)
         self._takeoff.load_pdf(path)
+        # Reset zone cache when the document changes — old zones don't apply.
+        self._zone_cache = {}
+        self._ensure_trace_link()
 
     def _on_sheet_clicked(self, page_num: int) -> None:
         viewer = self._takeoff.pdf_viewer
@@ -403,6 +443,38 @@ class MainWindow(QMainWindow):
             "Run Extraction not wired in this commit — full wiring in commit 4+.",
             variant="warning",
         )
+
+    def _on_toggle_zone_overlay(self, checked: bool) -> None:
+        """Toggle the per-page zone overlay; segments lazily and caches results."""
+        viewer = self._takeoff.pdf_viewer
+        if viewer is None or not hasattr(viewer, "show_zone_overlay"):
+            Toaster.show("Load a PDF before toggling zones.", variant="warning")
+            self._zone_overlay_btn.setChecked(False)
+            return
+        if not checked:
+            viewer.hide_zone_overlay()
+            return
+        page_num = int(getattr(viewer, "current_page", 0) or 0)
+        if page_num <= 0:
+            self._zone_overlay_btn.setChecked(False)
+            return
+        zones = self._zone_cache.get(page_num)
+        if zones is None:
+            try:
+                # Imported lazily — segmenter pulls in OpenCV / numpy which we
+                # don't want to load before the toggle is first used.
+                from parser.zone_segmenter import segment as _segment
+                import fitz as _fitz
+                if not viewer.pdf_path:
+                    raise RuntimeError("no pdf path")
+                with _fitz.open(viewer.pdf_path) as doc:
+                    zones = _segment(doc[page_num - 1], page_num=page_num)
+                self._zone_cache[page_num] = zones
+            except Exception as exc:  # pragma: no cover — defensive
+                Toaster.show(f"Zone segmentation failed: {exc}", variant="danger")
+                self._zone_overlay_btn.setChecked(False)
+                return
+        viewer.show_zone_overlay(page_num, zones)
 
 
 __all__ = ["MainWindow", "TOPBAR_HEIGHT", "NAV_RAIL_WIDTH", "DOCK_STRIP_HEIGHT"]
