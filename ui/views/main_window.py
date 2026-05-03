@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -28,9 +28,11 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.components import Button, EmptyState, Pill, Toaster
+from ui.components.command_palette import CommandPalette, build_palette_index
 from ui.controllers.trace_link import TraceLink
 from ui.panels.sheet_rail import SheetRail
 from ui.theme import apply_theme, tokens
+from ui.workspaces.cockpit_workspace import CockpitWorkspace
 from ui.workspaces.diff_workspace import DiffWorkspace
 from ui.workspaces.takeoff_workspace import TakeoffWorkspace
 
@@ -78,6 +80,10 @@ class MainWindow(QMainWindow):
         # TraceLink and per-page zone cache — populated lazily on first use.
         self._trace_link: Optional[TraceLink] = None
         self._zone_cache: dict[int, object] = {}
+        # Command palette — constructed lazily so its style cost is only paid
+        # once the user opens it. ``_open_command_palette`` builds it on demand.
+        self._command_palette: Optional[CommandPalette] = None
+        self._palette_shortcut: Optional[QShortcut] = None
 
         self.setWindowTitle("Zeconic QTO")
         self.resize(1440, 900)
@@ -170,7 +176,7 @@ class MainWindow(QMainWindow):
             parent=bar,
         )
         self._cmd_palette_btn.setObjectName("cmdPaletteBtn")
-        self._cmd_palette_btn.clicked.connect(self._on_command_palette)
+        self._cmd_palette_btn.clicked.connect(self._open_command_palette)
         layout.addWidget(self._cmd_palette_btn)
 
         self._compare_btn = Button(
@@ -274,9 +280,20 @@ class MainWindow(QMainWindow):
         self._diff_workspace.setObjectName("diffWorkspace")
         tabs.addTab(self._diff_workspace, "What Changed")
 
-        # Remaining placeholders — disabled until commits 9 / 11 land them.
+        # Wave 5 commit 9 — CockpitWorkspace replaces the disabled placeholder.
+        cache_dir = self._config.get("cache_dir", "./cache")
+        self._cockpit = CockpitWorkspace(parent=tabs, cache_dir=cache_dir)
+        self._cockpit.setObjectName("cockpitWorkspace")
+        tabs.addTab(self._cockpit, "Cockpit")
+        # Surface project meta if present in config.
+        project_meta = self._config.get("project_meta", {}) or {}
+        if project_meta.get("name"):
+            self._cockpit.set_project_name(str(project_meta["name"]))
+        if project_meta.get("deadline"):
+            self._cockpit.set_deadline(str(project_meta["deadline"]))
+
+        # Remaining placeholder — disabled until commit 11 lands.
         placeholders = [
-            ("Cockpit", "frame-corners", "Bid-day cockpit — coming in commit 9."),
             ("Coverage", "info", "Coverage / holes report — coming in commit 11."),
         ]
         for title, icon_name, body in placeholders:
@@ -389,6 +406,11 @@ class MainWindow(QMainWindow):
         self._sheet_rail.sheet_clicked.connect(self._on_sheet_clicked)
         self._takeoff.row_jump_requested.connect(self._on_row_jump_requested)
         self._diff_workspace.rerun_requested.connect(self._on_diff_rerun)
+        # Global ⌘K / Ctrl+K shortcut for the command palette. Application-
+        # scoped so it fires regardless of which child widget has focus.
+        self._palette_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
+        self._palette_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._palette_shortcut.activated.connect(self._open_command_palette)
 
     def _ensure_trace_link(self) -> Optional[TraceLink]:
         """Construct the TraceLink the first time the PDF viewer exists.
@@ -428,6 +450,18 @@ class MainWindow(QMainWindow):
         self._pdf_path = path
         self._sheet_rail.load_pdf(path)
         self._takeoff.load_pdf(path)
+        # Bind the cockpit to this project so per-PDF state persists
+        # across sessions. Row plumbing (cockpit.set_rows) lands when
+        # extraction wiring is finalised in a later commit; this commit
+        # only wires the fingerprint binding.
+        # TODO(commit 11+): call self._cockpit.set_rows(rows) after the
+        # extraction worker emits its merged row set.
+        try:
+            p = Path(path)
+            fingerprint = f"{p.name}:{p.stat().st_size}"
+            self._cockpit.set_pdf_fingerprint(fingerprint)
+        except OSError:
+            pass
         # Reset zone cache when the document changes — old zones don't apply.
         self._zone_cache = {}
         self._ensure_trace_link()
@@ -446,8 +480,142 @@ class MainWindow(QMainWindow):
             viewer.go_to_page(page_num)
         self._sheet_rail.set_active_sheet(page_num)
 
-    def _on_command_palette(self) -> None:
-        Toaster.show("Command palette ⌘K — coming in commit 8", variant="info")
+    def _open_command_palette(self) -> None:
+        """Build the index from current state and open the palette modal."""
+        if self._command_palette is None:
+            self._command_palette = CommandPalette(parent=self)
+            self._command_palette.item_chosen.connect(self._on_palette_chosen)
+        index = self._build_palette_index_for_current_state()
+        self._command_palette.set_index(index)
+        self._command_palette.open()
+
+    def _build_palette_index_for_current_state(self) -> list[dict]:
+        """Snapshot the current workspace into the palette's dict-list."""
+        rows: list = []
+        try:
+            rows = list(self._takeoff.data_table.model().rows())
+        except Exception:
+            rows = []
+        sheet_count = 0
+        sheet_titles: dict[int, str] = {}
+        try:
+            for sheet_row in getattr(self._sheet_rail, "_rows", []):
+                meta = getattr(sheet_row, "meta", None)
+                if meta is None:
+                    continue
+                page_num = int(getattr(meta, "page_num", 0) or 0)
+                if page_num <= 0:
+                    continue
+                sheet_count = max(sheet_count, page_num)
+                title = getattr(meta, "sheet_number", "") or f"Sheet {page_num}"
+                sheet_titles[page_num] = title
+        except Exception:
+            sheet_count = 0
+            sheet_titles = {}
+        divisions = sorted({
+            (r.trade_division or "").strip()
+            for r in rows
+            if not r.is_header_row and (r.trade_division or "").strip()
+        })
+        commands = self._registered_palette_commands()
+        return build_palette_index(
+            rows=rows,
+            sheet_count=sheet_count,
+            sheet_titles=sheet_titles,
+            divisions=divisions,
+            commands=commands,
+        )
+
+    def _registered_palette_commands(self) -> list[dict]:
+        """Return the static list of palette-invokable commands.
+
+        Each command's ``payload`` is a zero-arg callable. The palette never
+        invokes it itself — :py:meth:`_on_palette_chosen` does the calling
+        once the user picks a row.
+        """
+        return [
+            {
+                "label":    "Toggle theme",
+                "subtitle": "Switch between light and dark",
+                "payload":  self._on_toggle_theme,
+            },
+            {
+                "label":    "Open PDF…",
+                "subtitle": "Pick a drawing set to load",
+                "payload":  self._on_open_pdf,
+            },
+            {
+                "label":    "Toggle zone overlay",
+                "subtitle": "Show or hide title-block / legend zones",
+                "payload":  self._toggle_zone_overlay_via_command,
+            },
+            {
+                "label":    "Compare with…",
+                "subtitle": "Diff the loaded PDF against another set",
+                "payload":  self._on_compare_with,
+            },
+            {
+                "label":    "Run extraction",
+                "subtitle": "Re-run the multi-agent extraction pipeline",
+                "payload":  self._on_run_extraction,
+            },
+            {
+                "label":    "Switch to Takeoff tab",
+                "subtitle": "Show the PDF + line-item table",
+                "payload":  lambda: self._switch_to_workspace(self._takeoff),
+            },
+            {
+                "label":    "Switch to What Changed tab",
+                "subtitle": "Compare against another drawing set",
+                "payload":  lambda: self._switch_to_workspace(self._diff_workspace),
+            },
+            {
+                "label":    "Switch to Cockpit tab",
+                "subtitle": "Bid-day cockpit view",
+                "payload":  lambda: self._switch_to_workspace(self._cockpit),
+            },
+        ]
+
+    def _toggle_zone_overlay_via_command(self) -> None:
+        """Flip the zone-overlay button's check state and run its handler."""
+        self._zone_overlay_btn.setChecked(not self._zone_overlay_btn.isChecked())
+        self._on_toggle_zone_overlay(self._zone_overlay_btn.isChecked())
+
+    def _switch_to_workspace(self, workspace: QWidget) -> None:
+        idx = self._workspace_host.indexOf(workspace)
+        if idx >= 0 and self._workspace_host.isTabEnabled(idx):
+            self._workspace_host.setCurrentIndex(idx)
+
+    def _on_palette_chosen(self, item: dict) -> None:
+        """Dispatch the palette's chosen item to the right handler."""
+        if not isinstance(item, dict):
+            return
+        kind = item.get("type")
+        payload = item.get("payload")
+        if kind == "command" and callable(payload):
+            payload()
+            return
+        if kind == "row" and isinstance(payload, dict):
+            page = int(payload.get("page") or 0)
+            sheet = str(payload.get("sheet") or "")
+            if page > 0:
+                self._on_row_jump_requested(page, sheet)
+            return
+        if kind == "sheet":
+            try:
+                page = int(payload)
+            except (TypeError, ValueError):
+                return
+            if page > 0:
+                self._on_sheet_clicked(page)
+            return
+        if kind == "division" and isinstance(payload, str) and payload:
+            try:
+                self._takeoff.data_table.filter_trade(payload)
+                self._switch_to_workspace(self._takeoff)
+            except Exception:
+                Toaster.show(f"Could not filter by {payload}", variant="warning")
+            return
 
     def _on_toggle_theme(self) -> None:
         self._theme_mode = "light" if self._theme_mode == "dark" else "dark"
