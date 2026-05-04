@@ -4,3 +4,25 @@ fastapi>=0.118.0
 uvicorn[standard]>=0.40.0
 python-dotenv>=1.0.0
 pyyaml>=6.0
+
+# ── DB / persistence (commit 1) ────────────────────────────────────────
+# SQLAlchemy 2.0 in async mode + asyncpg driver targeting the Supabase-
+# hosted Postgres in production and a local Docker Postgres in dev. Alembic
+# manages migrations; we hand-write the initial migration to avoid the need
+# for a live database during scaffolding.
+sqlalchemy[asyncio]>=2.0.30
+alembic>=1.13.0
+asyncpg>=0.29.0
+# psycopg's binary wheel — used by Alembic's offline-mode generator and by
+# pytest fixtures that prefer a synchronous connection.
+psycopg[binary]>=3.2.0
+
+# Pydantic-settings reads ``backend/.env`` and ``.env`` at the repo root
+# into a typed ``Settings`` object that other modules import.
+pydantic-settings>=2.4.0
+
+# ── Auth / storage (commits 2–3 — pulled in early so deps install once) ─
+# Supabase Python SDK is used by the storage backend (presigned URL ops);
+# auth verification uses pyjwt with the project's JWT secret.
+supabase>=2.6.0
+pyjwt[crypto]>=2.9.0
