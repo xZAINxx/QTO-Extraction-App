@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "**.md"
+      - "Plans/**"
+      - "assets/**"
+      - "ESTIMATE_FORMAT___GC.xlsx"
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch: {}
+
+# Cancel in-flight runs on the same branch when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    env:
+      # Headless Qt — every test file already sets this via os.environ.setdefault,
+      # but exporting it here covers the import-time path too.
+      QT_QPA_PLATFORM: offscreen
+      # Skip CV-weights download in CI; cv tests gate on weights file presence.
+      QTO_SKIP_WEIGHTS_DOWNLOAD: "1"
+      # Tests should never call out to real APIs — but if anything slips through,
+      # the empty key forces a clean failure rather than charging a real account.
+      ANTHROPIC_API_KEY: ""
+      NVIDIA_API_KEY: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install system dependencies (Qt + OpenCV)
+        run: |
+          sudo apt-get update
+          # Qt6 platform plugin runtime libs. Even with QT_QPA_PLATFORM=offscreen
+          # the Qt loader pulls in xcb/egl/dbus shared objects on import.
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libglib2.0-0 \
+            libdbus-1-3 \
+            libxkbcommon0 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-sync1 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libxcb1 \
+            libfontconfig1 \
+            libfreetype6
+
+      - name: Upgrade pip toolchain
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-timeout
+
+      - name: Show installed package versions
+        run: pip list
+
+      - name: Verify imports (catch missing system libs early)
+        run: |
+          python -c "from PyQt6.QtWidgets import QApplication; print('PyQt6 OK')"
+          python -c "import fitz; print('PyMuPDF', fitz.__doc__.splitlines()[0] if fitz.__doc__ else 'OK')"
+          python -c "import cv2; print('OpenCV', cv2.__version__)"
+          python -c "import anthropic, openai; print('SDKs OK')"
+
+      - name: Run pytest
+        run: |
+          pytest -v \
+            --tb=short \
+            --timeout=60 \
+            --durations=15 \
+            --color=yes \
+            tests/
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint with ruff (errors only — warnings ignored)
+        # E9,F63,F7,F82 = the syntax-error / undefined-name / breaking subset.
+        # We deliberately do NOT enforce style here so the existing codebase
+        # passes without a noisy first-pass cleanup.
+        run: |
+          ruff check --select E9,F63,F7,F82 --output-format=github .
+
+      - name: Ruff full report (informational, never fails)
+        continue-on-error: true
+        run: ruff check --output-format=github . || true
