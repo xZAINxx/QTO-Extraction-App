@@ -12,8 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QCursor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QProgressBar,
     QTabWidget,
     QVBoxLayout,
@@ -44,6 +45,54 @@ TOPBAR_HEIGHT = 56
 NAV_RAIL_WIDTH = 56
 DOCK_STRIP_HEIGHT = 44
 INSPECTOR_WIDTH = 320
+
+
+# Extraction-mode catalogue. Order = display order in the topbar menu.
+# Each tuple is ``(config_key, menu_label, tooltip)``.
+_EXTRACTION_MODES: tuple[tuple[str, str, str], ...] = (
+    (
+        "hybrid",
+        "Hybrid (Claude)",
+        "Default — Claude handles classification, vision, and composition. "
+        "Most accurate; highest token spend.",
+    ),
+    (
+        "multi_agent",
+        "Multi-Agent (NVIDIA + Claude)",
+        "NVIDIA NIM agents do extraction; Claude only reviews rows below "
+        "the confidence threshold. Lowest cost.",
+    ),
+    (
+        "claude_only",
+        "Claude Only (legacy)",
+        "Pure Claude pipeline, no agent routing. Use only if multi-agent "
+        "or hybrid produces issues you want to bisect.",
+    ),
+)
+
+
+class _ClickableModeBadge(Pill):
+    """Topbar extraction-mode badge that emits ``clicked`` on press.
+
+    Subclasses :class:`Pill` so the existing QSS variant styling and the
+    ``findChild(Pill, "modeBadge")`` lookups in tests still resolve. The
+    cursor flips to a pointing hand and a tooltip explains the affordance.
+    """
+
+    clicked = pyqtSignal()
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.setToolTip(
+            "Extraction mode — click to switch between Hybrid, Multi-Agent, "
+            "and Claude-only. Change applies on the next Run Extraction."
+        )
+
+    def mousePressEvent(self, event):  # noqa: N802 — Qt naming
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 def _surface_border_qss(
@@ -164,8 +213,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._project_btn)
 
         mode_text = str(self._config.get("extraction_mode", "hybrid")).upper()
-        self._mode_badge = Pill(text=mode_text, variant="info", parent=bar)
+        self._mode_badge = _ClickableModeBadge(
+            text=mode_text, variant="info", parent=bar,
+        )
         self._mode_badge.setObjectName("modeBadge")
+        self._mode_badge.clicked.connect(self._open_mode_menu)
         layout.addWidget(self._mode_badge)
 
         layout.addStretch(1)
@@ -707,6 +759,95 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, mode=self._theme_mode)
+
+    # --- Extraction-mode picker --------------------------------------
+
+    def _open_mode_menu(self) -> None:
+        """Pop a menu under the topbar mode badge listing the three modes.
+
+        Each entry is checkable; the active mode is pre-checked so the
+        user can read current state without having to dismiss the menu.
+        """
+        menu = QMenu(self)
+        current = str(self._config.get("extraction_mode", "hybrid"))
+        for mode_key, label, tooltip in _EXTRACTION_MODES:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(mode_key == current)
+            act.setToolTip(tooltip)
+            # Lambda default-args bind ``mode_key`` per-iteration so all
+            # actions don't end up calling the loop's last value.
+            act.triggered.connect(
+                lambda _checked=False, m=mode_key: self._set_extraction_mode(m)
+            )
+        pos = self._mode_badge.mapToGlobal(
+            self._mode_badge.rect().bottomLeft()
+        )
+        menu.exec(pos)
+
+    def _set_extraction_mode(self, mode: str) -> None:
+        """Apply ``mode`` at runtime and persist it to ``config.yaml``.
+
+        Mutates ``self._config`` so the next ExtractionWorker pickup
+        reads the new mode (worker reads the dict at start_run time).
+        Persists to disk so the choice survives an app restart.
+        """
+        valid_modes = {m for m, _, _ in _EXTRACTION_MODES}
+        if mode not in valid_modes:
+            return
+        if mode == self._config.get("extraction_mode"):
+            return
+        self._config["extraction_mode"] = mode
+        self._mode_badge.setText(mode.upper())
+        persisted = self._persist_extraction_mode(mode)
+        if persisted:
+            Toaster.show(
+                f"Extraction mode → {mode.upper()} (saved to config.yaml)",
+                variant="success",
+            )
+        else:
+            Toaster.show(
+                f"Extraction mode → {mode.upper()} "
+                "(runtime only — config.yaml not found at app dir)",
+                variant="warning",
+            )
+
+    def _persist_extraction_mode(self, mode: str) -> bool:
+        """Rewrite the ``extraction_mode:`` line in config.yaml in place.
+
+        Preserves indentation and any trailing comment so the file's
+        structure stays clean across edits. Returns True if the file
+        was written, False if no config.yaml exists at the app dir.
+
+        Uses a line-level rewrite (not pyyaml round-trip) deliberately:
+        pyyaml drops comments and reorders keys, both of which would
+        corrupt the carefully-commented config block.
+        """
+        cfg_path = Path(self._app_dir) / "config.yaml"
+        if not cfg_path.exists():
+            return False
+        text = cfg_path.read_text()
+        new_lines: list[str] = []
+        replaced = False
+        for line in text.splitlines():
+            if not replaced and line.lstrip().startswith("extraction_mode:"):
+                indent = line[: len(line) - len(line.lstrip())]
+                comment_idx = line.find("#")
+                comment_part = line[comment_idx:] if comment_idx >= 0 else ""
+                new_line = f"{indent}extraction_mode: {mode}"
+                if comment_part:
+                    new_line = f"{new_line}   {comment_part}"
+                new_lines.append(new_line)
+                replaced = True
+            else:
+                new_lines.append(line)
+        if not replaced:
+            # No existing key — prepend it so it remains the first
+            # config.yaml entry (matches the original file convention).
+            new_lines.insert(0, f"extraction_mode: {mode}")
+        suffix = "\n" if text.endswith("\n") else ""
+        cfg_path.write_text("\n".join(new_lines) + suffix)
+        return True
 
     def _on_run_extraction(self) -> None:
         Toaster.show(
