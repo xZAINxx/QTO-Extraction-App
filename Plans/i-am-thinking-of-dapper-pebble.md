@@ -491,6 +491,8 @@ Sequential dependencies that can NOT parallelise:
 - **Excel round-trip file watcher** — XL effort, deferred.
 - **Multi-region deploy** — single Fly region (iad) for v1.
 
+(Note: items previously listed here as out-of-scope have been **promoted into Phase 4** below — annotation toolkit + reports surface — after the user reviewed STACK CT screenshots and asked for the human-element tooling alongside the AI extraction.)
+
 ---
 
 ## Open Questions (Defer to Implementation)
@@ -499,3 +501,149 @@ Sequential dependencies that can NOT parallelise:
 - **Bucket naming** — single `qto-pdfs` bucket with `{user_id}/{project_id}/{pdf_id}/source.pdf` key prefix + RLS keyed on the leading folder. Per-customer buckets only if a customer needs hard isolation (out of scope).
 - **Cancellation semantics** — `POST /api/extractions/{id}/cancel` flips DB status, but the running thread may not yield until next page boundary. Document as "cancellation takes effect at next page".
 - **Supabase RLS vs SQLAlchemy** — backend uses `SUPABASE_SERVICE_ROLE_KEY` (bypasses RLS) for performance; auth + scoping are enforced in our FastAPI middleware + WHERE-clauses, not via RLS. RLS only used on the storage bucket.
+
+---
+
+# Phase 4 — Human Annotation Toolkit + Reports (PR #3, after PR #2 merges)
+
+## Trigger
+
+User reviewed 6 STACK CT screenshots (project home + upload modal, plans grid, reports, sheet view with Edit menu, sheet view with Annotation menu, takeoff-quantity report) and asked us to **incorporate the human-element tooling alongside the AI extraction** for the Hybrid mode. Today the QTO pipeline is "AI extracts → table populates → done". STACK's value-add is the post-extraction *editor*: AI does first pass, estimator refines via 6 markup tools + 14 edit operations + 7 report types. PR #3 brings that surface to QTO with our own colours and icon set — we are NOT cloning STACK.
+
+## Decisions (from AskUserQuestion this turn)
+
+| Question | Decision |
+|---|---|
+| Color palette | **Midnight + violet (dark) / Warm cream + ink violet (light)** — escapes the STACK / Togal / Kreo emerald cliché entirely while keeping a calm, premium feel. |
+| Sequencing | **Finish PR #2 first, then PR #3.** PR #2 ships in emerald; PR #3 lands the visual pivot + the toolkit in one coherent "v2" experience. |
+| MVP tools | **All six STACK markup tools** (Highlight + Cloud + Callout + Dimension + Text Box + Legend) so the toolkit feels complete on first release rather than reading as a STACK feature gap. |
+
+## Color Palette Pivot — Midnight + Violet
+
+Both modes share token names; only hex values switch. Domain-semantic colours on table rows (yellow/pink/green/red/blue) are **unchanged** — they're orthogonal to brand.
+
+```
+                              DARK             LIGHT
+color.bg.canvas               #070914          #F8F5F0   warm cream
+color.bg.surface.1            #131829          #FFFFFF
+color.bg.surface.2            #1B2238          #FAF7F2
+color.bg.surface.3            #232C49          #F0EBE2
+color.bg.surface.raised       #2C375A          #FFFFFF (+shadow)
+color.border.subtle           rgba(148,163,184,.10)   #E7E5E4
+color.border.default          rgba(148,163,184,.18)   #D6D3D1
+color.border.strong           rgba(148,163,184,.28)   #A8A29E
+color.text.primary            #F1F5F9          #1C1917   warm near-black
+color.text.secondary          #94A3B8          #57534E
+color.text.tertiary           #7B8BA8          #78716C
+color.text.quaternary         #475569          #A8A29E
+
+# Brand — single accent, violet (replacing emerald)
+color.accent.default          #7C3AED          #5B21B6   deeper on cream
+color.accent.hover            #6D28D9          #4C1D95
+color.accent.pressed          #5B21B6          #3B0764
+color.accent.subtle           rgba(124,58,237,.16)    #EDE9FE
+color.accent.glow             rgba(124,58,237,.30)    rgba(91,33,182,.20)
+color.accent.on               #FFFFFF          #FFFFFF
+
+# Secondary — coral (replacing amber for Ask-AI / soft warnings)
+color.coral.default           #FB923C          #C2410C   terracotta
+color.coral.hover             #F97316          #9A3412
+color.coral.subtle            rgba(251,146,60,.15)    #FEE4D6
+color.coral.glow              rgba(251,146,60,.30)    rgba(194,65,12,.20)
+
+# UI states — restrained
+color.success                 #34D399          #15803D   approved-green (rows only)
+color.warning                 #FB923C          #C2410C   = coral (alias)
+color.danger                  #F87171          #B91C1C
+color.info                    #94A3B8          #57534E   slate
+
+# Domain semantics — UNCHANGED from Phase 1
+color.confirmed-yellow        #FDE047          #FACC15
+color.revision-pink           #F472B6          #DB2777
+color.demo-red                #F87171          #B91C1C
+color.approved-green          #34D399          #15803D
+color.mep-blue                #38BDF8          #0284C7
+```
+
+**Tri-color rule (unchanged in spirit, swapped in colour):** brand violet drives interactive chrome (buttons, focus rings, links, active nav). Coral drives transient AI-in-progress states + the Ask-AI button. Domain semantics drive *data state* on rows. The three palettes never cross.
+
+## Annotation Toolkit Surface (mirrors STACK images 4–5, redesigned)
+
+### 6 markup tools (Annotation menu)
+1. **Highlight** — colored rectangle / freeform polygon. Most-used tool.
+2. **Cloud** — revision-cloud markup. For RFIs and post-bid changes.
+3. **Callout** — text label with leader line; can link to a takeoff row.
+4. **Dimension** — auto-calculated line length using the calibrated scale (PyQt6 commit 11 already shipped Set-Scale; we reuse).
+5. **Text Box** — free annotation overlay.
+6. **Legend** — categorical mapping table embedded on a sheet.
+
+### 14 edit operations (Edit menu)
+Single Select · Multiselect · Select All · Undo · Cut · Copy · Paste · Merge · **Change Takeoff** · Explode · Rotate · Flip Horizontal · Flip Vertical · Cut Line · Delete
+
+The **Change Takeoff** op is the killer feature for Hybrid mode: select an annotated region → reassign it to a different takeoff row → no re-extraction needed. Closes the "AI got the category wrong" loop instantly.
+
+### 7 report types (Reports tab)
+Takeoff Quantity · Takeoff Summary · Measurements By Takeoff · Item List · Item Cost · Item Cost By Type · Item Cost By Takeoff
++ Snapshots (save report state, compare later) + Columns/Groupings/Filters/Reset + Print/Export (CSV/Excel/PDF).
+
+## Persistence — `annotations` table
+
+```sql
+CREATE TABLE annotations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pdf_id UUID NOT NULL REFERENCES pdfs(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sheet_number TEXT NOT NULL,
+  page_num INT NOT NULL,
+  type TEXT NOT NULL,                     -- highlight | cloud | callout | dimension | text_box | legend
+  geometry JSONB NOT NULL,                -- shape-specific: {bbox} for highlight, {points} for polygon, {start, end} for dimension, etc
+  color TEXT NOT NULL DEFAULT '#FDE047',  -- domain-semantic; defaults to confirmed-yellow
+  label TEXT,                             -- for callout / text-box / legend
+  takeoff_row_id UUID REFERENCES qto_rows(id) ON DELETE SET NULL,  -- nullable; set by Change-Takeoff op
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX annotations_pdf_sheet_idx ON annotations(pdf_id, sheet_number);
+CREATE INDEX annotations_takeoff_idx ON annotations(takeoff_row_id) WHERE takeoff_row_id IS NOT NULL;
+```
+
+## Implementation — desktop vs web parity
+
+| Concept | Desktop (PyQt6) | Web (React + PDF.js) |
+|---|---|---|
+| Canvas overlay | `QGraphicsScene` over `pdf_canvas.py` (already exists for trace-back). Add `AnnotationLayer` subclass. | SVG layer over `react-pdf` page. One `<g>` per annotation; absolute positioning in PDF coordinate space. |
+| Hit testing | `QGraphicsItem` natively. | Native SVG event delegation. |
+| Tool state | `QStateMachine` per tool. | `zustand` store: `{ activeTool: 'highlight'|null, selection: Set<id>, draftAnnotation: ... }`. |
+| Geometry editing | `QGraphicsItem` flags + `itemChange()`. | Resize handles as 8 SVG circles per selected annotation. |
+| Persistence | Calls `annotations` REST through the same `apiFetch` we already wired (commit 2). | Same. Single source of truth. |
+
+## Commit Sequence (10 commits → PR #3)
+
+| # | Commit | What |
+|---|---|---|
+| 13 | `feat(theme): pivot to midnight+violet (dark) + warm cream+ink-violet (light)` | Update tokens in `frontend/src/index.css` and `ui/theme/tokens.py`. Audit for hardcoded brand hexes. Update mode-badge / SignInGate / Ask-AI button colours. Side-by-side screenshots in PR description. |
+| 14 | `feat(annot): annotations table + REST API` | Alembic migration for the schema above. `POST/GET/PATCH/DELETE /api/projects/{id}/annotations` + `/api/annotations/{id}`. Tests for CRUD + auth scoping. |
+| 15 | `feat(annot): canvas overlay layer (web SVG + desktop QGraphics)` | `frontend/src/canvas/AnnotationLayer.jsx` + `ui/views/annotation_layer.py`. Selection model, marquee drag, keyboard shortcuts (Esc / Del / arrows / Cmd+A). |
+| 16 | `feat(annot): Highlight + Text Box tools` | Simplest two — bbox geometry, text overlay. Toolbar pivot keys (Shift+H, Shift+T). |
+| 17 | `feat(annot): Dimension + Set-Scale wiring` | Reuse existing `CalibrationDialog`. Auto-calculated length displayed inline. |
+| 18 | `feat(annot): Cloud + Callout tools` | Cloud's wavy-edge geometry, callout's leader line + linked-takeoff-row picker. |
+| 19 | `feat(annot): Legend tool + Edit menu (Cut/Copy/Paste/Merge/Explode/Rotate/Flip/Cut Line/Delete)` | Legend = categorical mapping widget. Edit-menu ops act on the selection set. |
+| 20 | `feat(annot): Change Takeoff op` | Right-click → "Change Takeoff…" → modal picker over `qto_rows`. The Hybrid-mode killer feature, called out in commit message + PR description. |
+| 21 | `feat(reports): 7 report types + groupings / filters / snapshots` | Reports tab in topbar. Snapshots persist to a new `report_snapshots` table. |
+| 22 | `feat(reports): print preview + CSV / Excel / PDF export` | Excel via `openpyxl`, PDF via headless Chromium / WeasyPrint. CSV inline. |
+
+Each commit lands behind passing CI; PR #3 is independently reviewable from PR #2.
+
+## What changes in PR #2 because of this addendum
+
+**Nothing.** PR #2 stays on emerald; the colour pivot + toolkit are PR #3's job. Commits 4–12 of PR #2 proceed as already planned.
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| **6 tools + 14 edit ops + 7 reports is a lot** for a single PR (10 commits ≈ 2–3 weeks). | Strict commit boundaries (one tool per commit). Each commit lands shippable; review can pause between tools without blocking. |
+| **Color pivot might feel disorienting** to anyone using the emerald build today. | Side-by-side screenshots in PR #3 description. Theme-toggle still works; users can stay on dark / light per preference. The pivot is brand colours only — domain-semantic table colours are UNCHANGED, so reading takeoffs still feels familiar. |
+| **PDF.js + SVG overlay performance** on 50-page sheets with 500 annotations. | Virtualise: render only the active sheet's annotation layer; lazy-load on page change. Use `transform` for pan/zoom (GPU-accelerated). Benchmarked target: 60fps on a 200-annotation sheet. |
+| **Change-Takeoff cascade** — reassigning an annotation to a different takeoff row needs to update aggregates (cockpit totals, coverage, reports) in real time. | The takeoff-row write fires a Postgres `LISTEN/NOTIFY` event the SSE channel pipes to all connected clients. Tested against a synthetic 100-row reassign in CI. |
+| **Annotation conflicts** if the same user opens two browser tabs and edits the same PDF. | `updated_at` optimistic locking — PATCH passes `If-Unmodified-Since`; server 409s on conflict; client refreshes. Documented as known limitation in commit 14. |
