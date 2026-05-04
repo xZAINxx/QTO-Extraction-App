@@ -1,0 +1,25 @@
+{
+  "name": "qto-tool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zeconic QTO Extraction Tool — PyQt6 desktop app that extracts Quantity Takeoff line items from architectural PDFs and exports to a GC estimate Excel template.",
+  "scripts": {
+    "dev": "./venv/bin/python3 main.py",
+    "start": "python3 main.py",
+    "install:py": "python3 -m pip install -r requirements.txt",
+    "venv": "python3 -m venv venv",
+    "test": "python3 -m pytest tests/ -v",
+    "test:smoke": "python3 -m pytest tests/test_extractor.py -v",
+    "lint": "python3 -m pyflakes . || true",
+    "clean": "rm -rf output cache __pycache__ .pytest_cache && find . -type d -name __pycache__ -prune -exec rm -rf {} +"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xZAINxx/QTO-Extraction-App.git"
+  },
+  "author": "Zeconic",
+  "license": "UNLICENSED",
+  "engines": {
+    "python": ">=3.11"
+  }
+}

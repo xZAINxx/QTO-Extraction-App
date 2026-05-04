@@ -1,275 +1,383 @@
-# Multi-Agent Refactor — QTO Extraction Tool
+# PyQt6 UI Redesign — Modern SaaS Reimagination
 
 ## Context
 
-The Zeconic QTO tool currently uses Claude (Anthropic) as the sole AI for every step: page-type classification, vision extraction, text parsing, CSI classification, and description normalization. Token spend is dominated by Sonnet vision crops on legends/schedules and Sonnet `compose_description` calls (one per row). The user wants to shift the heavy-lift inference to cheaper/faster NVIDIA NIM models (Nemotron-Mini, Llama-4-Maverick, Mistral-Nemotron, NV-Embed, NV-Rerank) and reserve Claude for orchestration and review of low-confidence rows. The refactor must be **additive** — existing `hybrid` and `claude_only` modes must keep working unchanged so we can A/B-compare cost/quality.
+The Zeconic QTO tool's current PyQt6 UI works but reads as a 2018-era developer dashboard: AI-blue accent on near-black background, Unicode glyphs as icons (`○ ◉ ✓ ⊘ ✗`), system-default fonts, hardcoded spacing, and a single 248px sidebar that crams upload form, stats card, tool buttons, assembly tree, and primary actions into one cramped column. After committing the multi-agent extraction refactor (6 commits, 141 tests green), I want to reimagine the front end with a SaaS-grade aesthetic and add the workflow features a 25-year construction estimator would actually brag about.
+
+**Decided constraints (confirmed with user via AskUserQuestion):**
+- Implementation tech: **PyQt6 in place**. Not a web rewrite. Native desktop kept.
+- Scope: **Full reimagination** — both visuals and features.
+- Reference SaaS aesthetics from STACK CT, Togal AI, Kreo (without copying any one of them — they each have their own clichés).
+- Use design principles from `/Users/zain/.agents/skills/design-taste-frontend/SKILL.md` as a baseline (DESIGN_VARIANCE 8, MOTION_INTENSITY 6, VISUAL_DENSITY 4).
+- All current functionality must keep working: multi-agent extraction, Phase 7 cost-saver batch, RAG store, set-diff, chat, pattern search, assemblies, Excel export.
 
 ## Mental-Model Corrections
 
-The refactor brief named files that do not exist as separate modules:
+The skill file is React/Tailwind-oriented; we translate its principles into PyQt6:
+- **Tailwind utility classes → QSS** generated from a token dict.
+- **Phosphor React icons → qtawesome** ≥ 1.3 (which bundles the Phosphor pack as `ph.*`).
+- **Framer Motion → QPropertyAnimation** wrapped in a single `Animator` helper.
+- **`@apply` style composition → QSS attribute selectors driven by `widget.setProperty("variant", "primary")`** dynamic properties (no `polish()`/`unpolish()` jank).
+- **`'use client'` interactivity isolation → QDockWidget**, which gives multi-monitor support natively.
 
-- **`csi_classifier.py` does not exist.** CSI logic lives in [ai/client.py:185](ai/client.py:185) `classify_csi()` (marked "kept for backward compat post-Step-11" — no live callers). The new agent revives this surface as a real, used component.
-- **`description_normalizer.py` does not exist.** GC-format normalization is [ai/description_composer.py](ai/description_composer.py) (the `_SYSTEM` prompt + 13 few-shots) plus [ai/client.py:207](ai/client.py:207) `compose_description()` invoked per row from [core/assembler.py:266](core/assembler.py:266). The new agent swaps *who answers `compose_description`*, no new file required.
-- **`pdf_splitter.py` makes zero AI calls.** Page classification is pure text heuristics ([parser/pdf_splitter.py:39](parser/pdf_splitter.py:39)). `AIClient.classify_page_type()` ([ai/client.py:149](ai/client.py:149)) exists but has no production caller. Adding a NIM agent here is *new behavior*, not a swap. Recommendation: keep heuristics as fast-path, call the NIM agent only when the heuristic returns the default fallback (`PLAN_CONSTRUCTION`).
-- **No RAG / vector store exists.** [core/cache.py](core/cache.py) is a single-table SQLite extractions store keyed by PDF fingerprint. The historical line-item store is greenfield.
-- **No agent abstraction exists.** All extractors are module-level functions taking an `ai_client`. Class-based agents would be inconsistent — go function-based.
+Two facts the brief named that I want to flag:
+- **Brand vs. data colors are different namespaces.** The "max 1 accent" rule governs interactive chrome (buttons, focus rings, links). Construction's domain semantics — yellow=confirmed, pink=revision, green=approved, red=demo — are separate data tokens. Both palettes coexist; we never cross them.
+- **`QTableWidget` cannot virtualize.** The 10k-row scroll target requires migrating to `QTableView` + `QAbstractTableModel`. Non-trivial — budget it explicitly.
 
 ## Design Decisions
 
-### 1. Provider Abstraction — `ai/providers/`
+### 1. Color tokens — semantic, dual-mode, green-accent (industry convention)
 
-New package, three files. Use a `Protocol` with **capability flags**, not a symmetric ABC, to honor the real asymmetry (Anthropic has caching+batches; NVIDIA has embeddings+rerank).
+Replace the current CANVAS/SURFACE_*/INDIGO palette with a calibrated stone-base + emerald-accent system. **All three SaaS QTO references converge on green as the primary action color** (STACK #33B270, Togal #3AB65A, Kreo #29AD67) — green is the industry's universal "measurement confirmed, money saved" signal. It also escapes the design-taste skill's "AI neon blue" ban.
+
+Both modes share token names; only hex values switch.
 
 ```
-ai/providers/
+                              DARK            LIGHT
+color.bg.canvas               #0B0D10         #FAFAF9
+color.bg.surface.1            #14171C         #FFFFFF
+color.bg.surface.2            #1B1F26         #F4F4F2
+color.bg.surface.3            #232830         #ECECEA
+color.bg.surface.raised       #2A3038         #FFFFFF (+shadow)
+color.border.subtle           #232830         #E7E5E4
+color.border.default          #2D333D         #D6D3D1
+color.border.strong           #3F4651         #A8A29E
+color.text.primary            #F5F5F4         #1C1917
+color.text.secondary          #A8A29E         #57534E
+color.text.tertiary           #78716C         #78716C
+
+# Brand — single accent, industry-standard emerald, ~64% saturation
+color.accent.default          #33B270         #16A34A
+color.accent.hover            #4BC588         #15803D
+color.accent.pressed          #259458         #166534
+color.accent.subtle           #0E2818         #ECFAF2
+color.accent.on               #FFFFFF         #FFFFFF
+
+# UI states — restrained
+color.success                 #16A34A         #15803D   # may alias accent in some contexts
+color.warning                 #D97706         #B45309   # amber — AI-in-progress, soft warnings
+color.danger                  #DC2626         #B91C1C
+color.info                    #475569         #334155   # slate, NOT blue
+
+# Domain semantics — construction estimator conventions (orthogonal to brand)
+color.confirmed-yellow        #FACC15         #FACC15   # universal "I counted this" highlight
+color.revision-pink           #EC4899         #DB2777
+color.demo-red                #DC2626         #B91C1C
+color.approved-green          #16A34A         #15803D
+color.mep-blue                #0EA5E9         #0284C7
+color.scope-out               #78716C         #A8A29E
+```
+
+**Tri-color logic to codify in `tokens.py` docstring:** brand emerald drives interactive chrome (buttons, focus rings, links). Amber `color.warning` drives transient AI-in-progress states and soft warnings. Domain semantics (yellow/pink/green/red/blue) drive *data state* on rows. These three palettes never cross — never use brand emerald for data state, never use yellow for interactive chrome.
+
+### 2. Typography — Geist Sans + Geist Mono, bundled
+
+- Bundle Geist Sans + Geist Mono in `assets/fonts/Geist/` (SIL Open Font License — confirmed safe for embedding).
+- Load once at app boot via `QFontDatabase.addApplicationFont`. Fall through to `system-ui` only if loading fails (log warning).
+- Tabular figures via `QFont.setFeatures({"tnum": 1})` on all numeric columns and metric values.
+- Ban `.AppleSystemUIFont` and `Inter` from QSS.
+
+Type scale (px / line-height / weight):
+
+```
+caption      11 / 16 / 500    UPPERCASE +0.06em — column headers, metric labels
+body-sm      12 / 18 / 400    table rows, helper text
+body         13 / 20 / 400    default UI
+body-lg      14 / 22 / 400    inspector, descriptions
+h6           14 / 20 / 600    inline section
+h5           16 / 24 / 600    panel titles
+h4           18 / 26 / 600    modal titles, view headers
+h3           22 / 30 / 600    topbar project name, cockpit metrics
+h2           28 / 36 / 600    cockpit total
+h1           36 / 44 / 600    empty-state hero only
+mono-sm      12 / 18 / 400    tabular numerics
+mono         13 / 20 / 400    math_trail, tags
+```
+
+### 3. Spacing / radius / shadow / motion / icon tokens
+
+```
+space.0  0    space.1  4    space.2  8    space.3  12
+space.4  16   space.5  20   space.6  24   space.8  32
+space.12 48   space.16 64
+
+radius:  0 / 4 / 6 / 8 / 12 / 16 / full(9999)
+
+shadow.1 = 0 1 2 rgba(0,0,0,0.20)    # cards
+shadow.2 = 0 4 8 rgba(0,0,0,0.30)    # popovers
+shadow.3 = 0 12 24 rgba(0,0,0,0.40)  # modals, command palette
+shadow.4 = 0 24 48 rgba(0,0,0,0.50)  # detached windows highlight
+
+motion.fast    120ms cubic-bezier(0.4,0,0.2,1)
+motion.normal  200ms cubic-bezier(0.4,0,0.2,1)
+motion.slow    320ms cubic-bezier(0.4,0,0.2,1)
+motion.spring  400ms cubic-bezier(0.34,1.56,0.64,1)
+```
+
+Light-mode shadows reduce to 0.06–0.20 alpha. All animation calls go through one `Animator` helper.
+
+**Icons:** `qtawesome>=1.3` (bundles Phosphor). Wrapped in `ui/theme/icons.py` so callers say `icon("upload")`, not `qta.icon("ph.upload")`. Phosphor (line weight 1.5) for almost everything; fall back to MaterialDesignIcons for the few construction-specific glyphs Phosphor lacks.
+
+The 30 Phosphor icons we'll need: `upload`, `play`, `stop-circle`, `pause`, `download-simple`, `magnifying-glass`, `funnel`, `eye`, `check-circle`, `warning`, `x-circle`, `arrows-clockwise`, `caret-left`, `caret-right`, `caret-down`, `dots-three`, `command`, `chat-circle`, `gear`, `sun`, `moon`, `corners-out` (detach), `frame-corners` (cockpit), `git-diff`, `compass-tool` (calibration), `paint-brush` (assemblies), `tag`, `lightbulb` (AI suggestion), `info`, `floppy-disk` (export).
+
+### 4. Layout architecture — new IA
+
+Current: 248px Sidebar (UploadPanel + StatsBar + tool buttons + AssemblyPalette + actions) + Splitter[PDFViewer | ResultsTable+ProgressPanel] + 32px CostMeter footer.
+
+New: topbar + nav rail + sheet rail + workspace tabs + inspector + dock strip. Each column has one job.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ TOPBAR  56px                                                                │
+│ [logo] Project switcher ▾ │ Mode: Hybrid │ ⌘K Search ── │ ☼ │ user         │
+├──────┬─────────────────┬──────────────────────────────┬─────────────────────┤
+│ NAV  │ SHEET RAIL      │  WORKSPACE                   │ INSPECTOR           │
+│ RAIL │ 220px           │  flex                        │ 320px (collapsible) │
+│ 56px │ collapse → 64   │                              │                     │
+│      │                 │  Tabs: Takeoff │ Diff │      │ Per-row details:    │
+│ icon │ thumbnails      │        Cockpit │ Coverage   │  - Source provenance│
+│ only │ + sheet meta    │                              │  - Confidence break │
+│      │ disciplines     │  ┌──── canvas ────┬─table──┐ │  - Risk flags       │
+│ ◐    │ revision tags   │  │ PDF + overlay  │ rows   │ │  - Edit history     │
+│      │ scope status    │  │                │        │ │  - Linked sheet     │
+│ home │ search + filter │  │ trace-back     │ filter │ │                     │
+│ ext  │                 │  │ highlight on   │ bar    │ │                     │
+│ asm  │                 │  │ row click      │ ↕      │ │                     │
+│ chat │                 │  │                │        │ │                     │
+│ ...  │                 │  │ ⤢ detach       │ ⤢      │ │                     │
+│      │                 │  └────────────────┴────────┘ │                     │
+├──────┴─────────────────┴──────────────────────────────┴─────────────────────┤
+│ DOCK STRIP  44px (collapsible)                                              │
+│ Cost $0.42 · 1.2k tok · cache 94% │ Phase 7: 12/40 │ Progress ▒▒▒░░ 60% │  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Topbar (56px)**: project switcher, extraction-mode badge (clickable → settings popover), command palette trigger, theme toggle.
+- **Nav rail (56px, icon-only)**: Home, Extraction, Assemblies, Chat, Settings. Tooltip on hover.
+- **Sheet rail (220px, collapsible to 64)**: vertical thumbnails, each with sheet number, discipline letter, revision pill, scope status dot. Top: search + discipline filter chips.
+- **Workspace center (flex, tabbed)**: Takeoff | What Changed | Cockpit | Coverage. Inside Takeoff: PDF canvas + DataTable side-by-side.
+- **Inspector (320px, collapsible)**: per-row drill-down — provenance, confidence breakdown, risk flags, edit history.
+- **Dock strip (44px)**: cost meter + active progress mini-readout.
+- **Detached panels**: PDF viewer, chat, inspector, sheet rail each as `QDockWidget` with `setFloating(True)` available — multi-monitor for free. State persisted via `saveState()`/`restoreState()`.
+
+### 5. Phase 1 features — top 8 ranked by impact × shippability
+
+| # | Feature | Difficulty | Notes |
+|---|---|---|---|
+| 1 | Trace-back overlay (row ↔ region sync) | M | Extends `QTORow` with `bbox: tuple[float,float,float,float] | None`. Bidirectional via `controllers/trace_link.py`. |
+| 2 | Sheet index rail with thumbnails | M | New `SheetRail` widget. Thumbnails cached via `QPixmapCache`. Scope status persisted to `cache/scope.json`. |
+| 3 | StatusPill per row (confidence + next action) | S | Color-coded: ≥0.9 green Confirm, 0.6–0.9 amber Review, <0.6 red Re-extract. Click pill → action. |
+| 4 | Yellow-confirm flow | S | Y key or pill click → row painted `confirmed-yellow` (light-tinted in dark mode). Persisted via `ResultCache`. Adds `confirmed: bool` to `QTORow`. |
+| 5 | What-Changed workspace tab | M | Promote `set_diff_view.py` from modal to first-class tab with $-impact column. |
+| 6 | Command palette ⌘K | M | Frameless dialog, fuzzy search rows/sheets/divisions/commands. `rapidfuzz` or stdlib `difflib`. |
+| 7 | Detached panels (`QDockWidget`) | S | Multi-monitor via native Qt. State persisted to `~/.qto_tool/window_state.bin`. |
+| 8 | Cockpit mode workspace | M | Bid-day view: total, division chart, sub-bid table, markup sliders, exclusions, deadline clock, regenerate-proposal button (export stub in P1). |
+
+### 6. Phase 2 features — 4
+
+9. Drag-and-drop reclassify between divisions (preserves provenance).
+10. Coverage / "holes" workspace — spec sections with zero line items + division benchmarking.
+11. Risk flag pills per row (spec ambiguity, design-development drawing, volatile material).
+12. Detail-bubble preview — hover `4/A-501` callout in canvas → tooltip with detail thumbnail; click → jump to sheet.
+
+### 7. Phase 3 features — 2 (lower-priority polish + final flag flip)
+
+13. Calibration manager — per-sheet scale calibration with propagate-to-series.
+14. Detail-bubble preview shipped + flag flip default to `ui_v2: true` + delete `ui/legacy/`.
+
+**Deferred (not in scope):** Excel round-trip file watcher (XL effort), inline RAG ghost-text suggestions during cell edit (XL effort, requires per-keystroke embedding calls), in-app formula cells in DataTable (Kreo's "live spreadsheet" pattern — XL effort, needs a formula engine). All can land as follow-up tickets after the redesign settles.
+
+**Underexploited differentiator surfaced by competitor research:** STACK / Togal / Kreo are all cloud-only. This tool is **local-first / desktop-first** — a major advantage for data-sensitive government, defense, and healthcare construction projects where drawing sets cannot leave the network. The redesign should subtly market this fact in onboarding (e.g., the empty-state copy on first launch: "Your drawings stay on this machine. No cloud uploads."). No engineering work — copy decision only.
+
+**Drawing-zone classification already exists** in [parser/zone_segmenter.py](parser/zone_segmenter.py) — the existing pipeline tags title block, legend, schedule, and main drawing zones. Kreo brags about exactly this as "Caddie AI zone mapping." We should surface the existing zones visibly on the PDF canvas (faint colored bounding boxes on hover, toggled via a canvas overlay menu). Cheap win — zero new extraction logic, just a viewer overlay layer in `views/pdf_canvas.py`. Add this as part of commit 6 (trace-back overlay) since they share the overlay infrastructure.
+
+### 8. Component library — `ui/components/`
+
+| Component | Variants | PyQt6 approach |
+|---|---|---|
+| `Button` | primary/secondary/ghost/danger × sm/md/lg, icon-only | `QPushButton` subclass + dynamic property `variant`/`size` styled via QSS |
+| `Pill` / `Badge` | info/success/warning/danger/neutral, with-dot | `QLabel` subclass with `paintEvent` for dot |
+| `StatusPill` | confidence + next-action combo | Composite widget |
+| `Card` | elevated/flat, with-header | `QFrame` subclass; shadow via `QGraphicsDropShadowEffect` |
+| `Input` | text/number/select/multi-select/search | Styled `QLineEdit`/`QComboBox`; floating label via overlay |
+| `Toggle` | sm/md | `QCheckBox` subclass with custom `paintEvent` |
+| `Tooltip` | rich content | `QFrame` popup driven by event filter |
+| `Tabs` | line / pill / segmented | `QTabBar` subclass |
+| `DataTable` | sort/filter/multi-select/virtualized | **`QTableView` + `QAbstractTableModel`** (replaces `QTableWidget` — required for 10k row target) |
+| `Skeleton` | line/block/table-row | `QWidget` with `QPropertyAnimation` shimmer |
+| `EmptyState` | icon + title + body + CTA | Composite widget |
+| `CommandPalette` | — | Frameless `QDialog` |
+| `DrawerPanel` | left/right, collapsible | `QDockWidget` subclass with collapse-to-rail mode |
+| `Toast` | info/success/warning/danger, autohide | `QWidget` overlay queued from `Toaster` singleton |
+| `Modal` | sm/md/lg/fullscreen | `QDialog` subclass with size token enforcement |
+| `Thumbnail` | with metadata | Composite (QLabel pixmap + meta pills) |
+
+## New `ui/` Directory Structure
+
+```
+ui/
   __init__.py
-  base.py              # Provider protocol + ProviderCapabilityError
-  anthropic_provider.py
-  nvidia_provider.py
+  theme/
+    tokens.py            # all design tokens, dark + light dicts
+    qss.py               # generates QSS from active token set
+    fonts.py             # QFontDatabase loader (Geist Sans + Mono)
+    icons.py             # qtawesome wrapper
+    motion.py            # Animator helper for QPropertyAnimation
+  components/
+    button.py
+    pill.py
+    status_pill.py
+    card.py
+    input.py
+    toggle.py
+    tabs.py
+    data_table.py        # QTableView + model, virtualized
+    skeleton.py
+    empty_state.py
+    toast.py
+    command_palette.py
+    drawer_panel.py
+    split_pane.py
+    thumbnail.py
+    modal.py
+  panels/
+    sheet_rail.py        # NEW — left thumbnails
+    inspector.py         # NEW — right per-row inspector
+    cost_dock.py         # was cost_meter.py
+    progress_dock.py     # was progress_panel.py
+    chat_dock.py         # was chat_panel.py
+    assembly_dock.py     # was assembly_palette.py
+    upload_dialog.py     # was upload_panel.py — promoted to project-create dialog
+  workspaces/
+    takeoff_workspace.py # PDF + DataTable + filter bar
+    diff_workspace.py    # was set_diff_view.py
+    cockpit_workspace.py # NEW
+    coverage_workspace.py# NEW (Phase 2)
+  views/
+    main_window.py       # rewritten — topbar + nav rail + workspace host
+    pdf_canvas.py        # was pdf_viewer.py + trace-back overlay
+  controllers/
+    trace_link.py        # NEW — row ↔ region binding
+    extraction_worker.py # extracted from old main_window.py (no logic change)
+  legacy/                # all current ui/*.py copied here for reference, deleted in final commit
 ```
 
-Interface:
+### Migration table — what changes vs. what's preserved
 
-```python
-class Provider(Protocol):
-    name: str
-    supports_caching: bool
-    supports_batches: bool
-    supports_vision: bool
-    supports_embeddings: bool
-    supports_reranking: bool
+| Current file | Fate |
+|---|---|
+| [ui/theme.py](ui/theme.py) | **Replaced** by `theme/` package. Same hex constants exported as deprecated re-exports for one release. |
+| [ui/main_window.py](ui/main_window.py) | **Rewritten** as `views/main_window.py`. `ExtractionWorker` extracted to `controllers/extraction_worker.py` unchanged. |
+| [ui/results_table.py](ui/results_table.py) | **Rewritten** as `components/data_table.py` + `workspaces/takeoff_workspace.py`. `QTableWidget` → `QTableView` + model. |
+| [ui/pdf_viewer.py](ui/pdf_viewer.py) | **Renamed + extended** as `views/pdf_canvas.py`. Adds trace-back overlay layer. |
+| [ui/progress_panel.py](ui/progress_panel.py) | **Moved** to `panels/progress_dock.py`. Becomes a `QDockWidget`. Logic preserved. |
+| [ui/cost_meter.py](ui/cost_meter.py) | **Moved** to `panels/cost_dock.py`. Becomes a `QDockWidget`. |
+| [ui/stats_bar.py](ui/stats_bar.py) | **Absorbed** into `panels/cost_dock.py` + `views/main_window.py` topbar. |
+| [ui/upload_panel.py](ui/upload_panel.py) | **Promoted** to `panels/upload_dialog.py` — opens as a modal on Project → New. Form labels move ABOVE inputs. |
+| [ui/chat_panel.py](ui/chat_panel.py) | **Moved** to `panels/chat_dock.py`. Becomes a `QDockWidget`. |
+| [ui/assembly_palette.py](ui/assembly_palette.py) | **Moved** to `panels/assembly_dock.py`. |
+| [ui/set_diff_view.py](ui/set_diff_view.py) | **Promoted** to `workspaces/diff_workspace.py` — workspace tab, not modal. Adds $-impact column. |
+| [ui/pattern_search_dialog.py](ui/pattern_search_dialog.py) | **Kept as modal** — unchanged in P1, restyled to new tokens. |
 
-    def chat(model, system, messages, max_tokens, *, cache_system=False, temperature=None) -> str
-    def vision(model, system, image_bytes, prompt, max_tokens, *, cache_system=False) -> str
-    def embed(model, texts) -> list[list[float]]
-    def rerank(model, query, passages) -> list[tuple[int, float]]
-```
-
-- `AnthropicProvider` reuses logic from [ai/client.py:86](ai/client.py:86) `_call` and [ai/client.py:108](ai/client.py:108) `_vision_call`. `embed`/`rerank` raise `ProviderCapabilityError`.
-- `NvidiaProvider` uses `httpx.Client` against `https://integrate.api.nvidia.com/v1/chat/completions` (OpenAI-compatible) and `/embeddings`. Reranker hits the **separate** host `https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking`. `vision()` requires `model == "meta/llama-4-maverick-17b-128e-instruct"`. Sends image as base64 in OpenAI multimodal content array.
-- Both providers receive a `TokenTracker` and call `tracker.record(...)` so the cost meter stays honest.
-
-Add `httpx>=0.27` to [requirements.txt](requirements.txt) (already a transitive dep of `anthropic`; pin it).
-
-### 2. Agent Layer — `ai/agents/` (function-based)
-
-```
-ai/agents/
-  __init__.py             # AgentContext dataclass
-  page_classifier.py      # classify_page(text, ctx) -> str
-  vision_extractor.py     # extract_from_image(image_bytes, prompt, ctx) -> str
-  text_extractor.py       # extract_from_text(text, prompt, ctx) -> list[dict]
-  csi_classifier.py       # classify(description, fallback_keywords, ctx) -> tuple[str, float]
-  description_normalizer.py # normalize(raw, sheet, keynote_ref, ctx) -> str
-  rag.py                  # prime_normalizer(raw, ctx) -> list[str]
-  orchestrator.py         # review_rows(rows, threshold, ctx) -> list[QTORow]
-```
-
-`AgentContext` carries `providers: dict[str, Provider]`, `tracker`, `cache`, `agent_config: dict` (this agent's slice of `config["agents"]`), and `rag_store: Optional[HistoricalStore]`. Agents are stateless; caching lives in `MultiAgentClient`.
-
-The normalizer reuses `ai.description_composer._SYSTEM` verbatim — that prompt is model-portable; only the inference call changes.
-
-### 3. Assembler Changes — Two Lines
-
-Do **not** touch [core/assembler.py:59](core/assembler.py:59) `process_page()`. It only ever talks to `self._ai`, which is duck-typed. The dispatch happens upstream in [ui/main_window.py:88](ui/main_window.py:88):
-
-```python
-mode = self._config.get("extraction_mode", "hybrid")
-if mode == "multi_agent":
-    from ai.multi_agent_client import MultiAgentClient
-    ai = MultiAgentClient(self._config, tracker)
-else:
-    ai = AIClient(self._config, tracker)
-assembler = Assembler(self._config, ai, tracker)
-```
-
-Inside [core/assembler.py:325](core/assembler.py:325) `flush_batched_compose`, append a single hook for the orchestrator review (runs after Phase-7 batch flush, before sort/validate):
-
-```python
-review = getattr(self._ai, "review_low_confidence_rows", None)
-if review is not None:
-    threshold = self._config.get("confidence_review_threshold", 0.75)
-    review(rows, threshold)
-```
-
-`process_page` and `_make_row` stay agnostic; they keep assigning method-based confidence at [assembler.py:281](core/assembler.py:281). The orchestrator revises `confidence` and (optionally) `description` in-place during the post-pass.
-
-### 4. AIClient Refactor — Parallel Class, Not Facade
-
-Leave [ai/client.py](ai/client.py) **exactly as-is**. Add [ai/multi_agent_client.py](ai/multi_agent_client.py) next to it.
-
-Rationale: `AIClient` houses the working Phase-7 batch path (`_pending_compose`, `flush_pending_compose`), prompt-cache wiring, and `chat_over_rows`. Wrapping it in a facade risks breaking the 50% batch saving currently in production. A parallel class makes the multi-agent path additive and reversible (toggle `extraction_mode` back to `hybrid` at any time).
-
-`MultiAgentClient` exposes the same 13-method public surface as `AIClient` plus a 14th: `review_low_confidence_rows`. Each method is a 1-line delegation to its agent. Phase-7 hooks (`cost_saver_mode`, `pending_compose_count`, `flush_pending_compose`) are stubbed as no-ops/`False`/`0` so `assembler.flush_batched_compose` doesn't crash on `getattr`.
-
-`chat_over_rows` and `describe_diff_cluster` stay on Anthropic even in `multi_agent` mode — they need prompt caching for repeated questions and the diff prompt is tuned for Sonnet.
-
-Add `review_low_confidence_rows` to **`AIClient` too** (~30 lines, routes to Sonnet) so `hybrid` mode also benefits from the orchestrator pass.
-
-### 5. Config Schema (Additive)
-
-All new keys; existing keys untouched. Append to [config.yaml](config.yaml):
-
-```yaml
-extraction_mode: hybrid     # extends existing enum: hybrid | claude_only | multi_agent
-
-providers:
-  anthropic:
-    api_key_env: ANTHROPIC_API_KEY
-  nvidia:
-    api_key_env: NVIDIA_API_KEY
-    chat_base_url: "https://integrate.api.nvidia.com/v1"
-    rerank_base_url: "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
-    timeout_s: 60
-
-agents:
-  page_classifier:
-    provider: nvidia
-    model: "nvidia/nemotron-mini-4b-instruct"
-    temperature: 0.0
-    max_tokens: 24
-    fast_path_heuristics: true
-  vision_extractor:
-    provider: nvidia
-    model: "meta/llama-4-maverick-17b-128e-instruct"
-    temperature: 0.0
-    max_tokens: 4000
-    fallback_provider: anthropic
-    fallback_model: claude-sonnet-4-6
-  text_extractor:
-    provider: nvidia
-    model: "mistralai/mistral-nemotron"
-    temperature: 0.0
-    max_tokens: 2000
-  csi_classifier:
-    provider: nvidia
-    model: "nvidia/nemotron-mini-4b-instruct"
-    temperature: 0.0
-    max_tokens: 64
-  normalizer:
-    provider: nvidia
-    model: "nvidia/nemotron-mini-4b-instruct"
-    temperature: 0.0
-    max_tokens: 512
-    use_rag_priming: true
-    rag_top_k: 5
-  orchestrator:
-    provider: anthropic
-    model: claude-sonnet-4-6
-    temperature: 0.0
-    max_tokens: 1500
-    review_threshold: 0.75
-
-rag:
-  enabled: false             # opt-in
-  embedding_model: "nvidia/nv-embed-v1"
-  rerank_model: "nv-rerank-qa-mistral-4b:1"
-  store_path: "./cache/historical.db"
-```
-
-`hybrid` and `claude_only` modes ignore `agents:`/`providers:`/`rag:` blocks entirely. `multi_agent` mode ignores the legacy `models:` block. Backward compat is preserved because `AIClient.__init__` still reads `models`/`anthropic_api_key`/`cost_saver_mode` from their original positions.
-
-### 6. Orchestrator Review — End-of-Run Batched
-
-`ai/agents/orchestrator.py` exposes `review_rows(rows, threshold, ctx)`:
-
-1. Filter to `rows` where `not is_header_row and confidence < threshold`.
-2. Chunk to ~20 rows per request.
-3. For each chunk, send a JSON payload (`row_id`, `description`, `qty`, `units`, `sheet`, `method`, `confidence`) to Sonnet with a system prompt: "for each row, return one of {confirm, revise, reject} with a revised description if revising."
-4. Apply revisions in-place: bump `confidence` to 0.9, set `extraction_method = "reviewed"`, update `description` if revised.
-
-Hook fires from [core/assembler.py:325](core/assembler.py:325) `flush_batched_compose` after Phase-7 flush, before sort/validate. Cost: one Sonnet call per ~20 low-conf rows — typically a single-digit number of calls per PDF.
-
-### 7. RAG Store — SQLite + numpy Embeddings
-
-[core/rag_store.py](core/rag_store.py) (new):
-
-```sql
-CREATE TABLE historical_descriptions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    raw_input TEXT NOT NULL,
-    normalized TEXT NOT NULL,
-    sheet TEXT, keynote_ref TEXT,
-    project_name TEXT,
-    embedding BLOB NOT NULL,           -- np.float32 bytes
-    created_at TEXT DEFAULT (datetime('now')),
-    used_count INTEGER DEFAULT 0
-);
-CREATE INDEX idx_hist_proj ON historical_descriptions(project_name);
-```
-
-`HistoricalStore` exposes `add(raw, normalized, sheet, project, embedding)` and `search(query_embedding, top_k=20, project=None) -> list[(score, dict)]` doing in-Python cosine similarity. Avoid `sqlite-vec` (fragile macOS install); linear scan over <50k rows is sub-millisecond.
-
-**Population is opt-in** — adding every extraction creates a feedback loop where bad rows poison future runs. Phase 1: CLI populator only. Phase 2 (separate ticket): "Save approved rows" button in `ui/results_table.py`.
-
-**Integration is priming, not validation.** Inside `description_normalizer.normalize`: if `ctx.rag_store and use_rag_priming`, embed the raw text → search top-20 → rerank with `nv-rerank-qa-mistral-4b:1` → keep top-K → inject as additional few-shot examples appended to the existing `_SYSTEM` prompt. All wrapped in `try/except ProviderCapabilityError: pass` so RAG failure doesn't fail extraction.
-
-## Critical Files To Modify
+## Files To Modify Outside `ui/`
 
 | File | Change |
 |---|---|
-| [requirements.txt](requirements.txt) | Add `httpx>=0.27` |
-| [config.yaml](config.yaml) | Append `providers:`, `agents:`, `rag:` blocks; extend `extraction_mode` enum |
-| [ai/providers/base.py](ai/providers/base.py) | NEW — Protocol + capability error |
-| [ai/providers/anthropic_provider.py](ai/providers/anthropic_provider.py) | NEW — wraps existing `_call`/`_vision_call` logic |
-| [ai/providers/nvidia_provider.py](ai/providers/nvidia_provider.py) | NEW — httpx client, OpenAI-compatible chat + embeddings + separate rerank URL |
-| [ai/agents/__init__.py](ai/agents/__init__.py) | NEW — `AgentContext` dataclass |
-| [ai/agents/page_classifier.py](ai/agents/page_classifier.py) | NEW |
-| [ai/agents/vision_extractor.py](ai/agents/vision_extractor.py) | NEW |
-| [ai/agents/text_extractor.py](ai/agents/text_extractor.py) | NEW |
-| [ai/agents/csi_classifier.py](ai/agents/csi_classifier.py) | NEW |
-| [ai/agents/description_normalizer.py](ai/agents/description_normalizer.py) | NEW — reuses `description_composer._SYSTEM` |
-| [ai/agents/rag.py](ai/agents/rag.py) | NEW |
-| [ai/agents/orchestrator.py](ai/agents/orchestrator.py) | NEW |
-| [ai/multi_agent_client.py](ai/multi_agent_client.py) | NEW — 14-method facade matching `AIClient` surface |
-| [ai/client.py](ai/client.py) | Add `review_low_confidence_rows` method (~30 lines) |
-| [core/rag_store.py](core/rag_store.py) | NEW — SQLite + numpy cosine search |
-| [core/assembler.py](core/assembler.py) | Append 3-line orchestrator hook in `flush_batched_compose` (line 325) |
-| [core/token_tracker.py](core/token_tracker.py) | Add NVIDIA model buckets to `_PRICING`, add `record_nvidia()` |
-| [ui/main_window.py](ui/main_window.py) | Branch on `extraction_mode` at line 88 to instantiate `MultiAgentClient` |
+| [requirements.txt](requirements.txt) | Add `qtawesome>=1.3.0`, `rapidfuzz>=3.0` |
+| [config.yaml](config.yaml) | Add `ui_v2: false` flag (default off until parity reached) |
+| [core/qto_row.py](core/qto_row.py) | Extend dataclass: `bbox: tuple[float,float,float,float] | None = None`, `confirmed: bool = False`. Backward-compatible — defaults preserve current behavior. |
+| [main.py](main.py) | Branch on `config["ui_v2"]` to import `ui.views.main_window` or `ui.legacy.main_window`. |
+| `assets/fonts/Geist/` | NEW — bundle Geist Sans + Geist Mono `.ttf` files + `LICENSE.txt` (SIL OFL 1.1). |
 
-## Files To Reuse (No Modification)
+## Files To Reuse Without Modification
 
-- [ai/description_composer.py](ai/description_composer.py) `_SYSTEM` — model-portable, used verbatim by normalizer agent
-- [ai/batch_runner.py](ai/batch_runner.py) — Anthropic batch path stays for `hybrid`+cost-saver
-- [parser/pdf_splitter.py](parser/pdf_splitter.py) — heuristics remain as fast-path; new agent fires only on default fallback
-- [core/qto_row.py](core/qto_row.py) — `QTORow` already has `confidence`, `needs_review`, `extraction_method` fields
-- [core/validator.py](core/validator.py) — threshold enforcement is generic; already reads `confidence_review_threshold`
+- All `ai/`, `core/` (except `qto_row.py`), `parser/`, `cv/` modules — UI redesign does not touch the extraction pipeline.
+- `tests/` — all 141 existing tests target `ai/`, `core/`, `parser/`, `cv/`. They keep passing automatically since they don't import from `ui/`.
+- [ESTIMATE_FORMAT___GC.xlsx](ESTIMATE_FORMAT___GC.xlsx) — Excel export template unchanged.
 
-## Commit Sequence (6 commits)
+## Migration Strategy — Progressive Behind a Feature Flag
 
-1. **`feat(providers): Provider protocol + Anthropic/NVIDIA impls`** — providers package, `httpx` pin, `tests/test_providers.py`. No production wiring.
-2. **`feat(agents): function-based agents for the five extraction stages`** — agents package, `AgentContext`, `tests/test_agents.py`. No production wiring.
-3. **`feat(client): MultiAgentClient + orchestrator review hook`** — `multi_agent_client.py`, `orchestrator.py`, `review_low_confidence_rows` on `AIClient`, 3-line hook in `assembler.flush_batched_compose`, dispatch in `ui/main_window.py`, `tests/test_multi_agent_client.py`.
-4. **`feat(rag): historical store + priming integration`** — `core/rag_store.py`, `ai/agents/rag.py`, normalizer reads RAG when `use_rag_priming`. Default-off.
-5. **`feat(config): multi_agent mode + providers/agents/rag config blocks`** — additive `config.yaml` keys, integration test against `tests/fixtures/HBT_drawings.pdf` with mocked NVIDIA HTTP.
-6. **`feat(meter): NVIDIA token-tracker buckets + cost meter labels`** — extend `_PRICING`, add `record_nvidia`, update `ui/cost_meter.py`.
+**Strategy: NOT a big-bang rewrite. Component-by-component behind `ui_v2: bool` flag.**
 
-After commit 3 the new path is selectable in code; after commit 5 it's user-selectable via config. You can ship 1–3 first and decide whether to land 4–6 based on observed quality.
+1. Add `ui_v2: false` to `config.yaml`.
+2. `main.py` picks `ui.views.main_window` when true, else `ui.legacy.main_window`. Both work in parallel.
+3. Each commit lands a coherent slice that runs end-to-end on `ui_v2=true`, even if some panels still use legacy widgets adapted via thin shims.
+4. Final commit (12): flip default to `true`, delete `ui/legacy/`.
+
+This means at any commit on the branch, you can run the app on either UI.
+
+### Smoothness — concrete techniques
+
+- **One-shot QSS generation** — `build_stylesheet(tokens)` runs once on theme change, applied to `QApplication`. Never set per-widget styles in code.
+- **Dynamic properties + attribute selectors** — `widget.setProperty("variant", "primary")` with `QPushButton[variant="primary"] { ... }`. No `polish()`/`unpolish()` jank when properties change.
+- **Lazy widget construction** — `Inspector`, `ChatDock`, `CockpitWorkspace` build their widget tree on first `show()`, not at MainWindow init.
+- **Animator-cap** — all `QPropertyAnimation` calls go through one `Animator` helper, capped at 200ms, no overlapping animations on the same widget.
+- **PDF render budget** — single global `QPixmapCache` of 256 MB shared by sheet-rail thumbnails and full-page renders. Thumbnails generated on-demand at first scroll on a `QThreadPool` worker, never on the GUI thread.
+- **Trace-back debounce** — single `QTimer` per overlay layer to coalesce highlight pulses; no `update()` storms.
+
+### Performance targets
+
+- DataTable scroll over 10k synthetic rows holds 60fps.
+- PDF canvas first-paint of a 500-page PDF under 800ms (fitz lazy-loads pages).
+- Theme toggle latency under 150ms on a 2k-row table.
+
+## Commit Sequence — 12 commits across 3 phases
+
+**Phase 1 (commits 1–6) — biggest visual delta, end-to-end on `ui_v2=true`:**
+
+1. **`feat(ui): tokens, QSS generator, light/dark toggle, Geist fonts, qtawesome wired`** — `ui/theme/` package. Old UI keeps running with new tokens applied to legacy widgets.
+2. **`feat(ui): component library skeleton`** — Button, Pill, StatusPill, Card, EmptyState, Skeleton, Toast in `ui/components/`. Smoke test per component (`tests/test_components_smoke.py`).
+3. **`feat(ui): layout shell`** — topbar + nav rail + workspace host + dock strip + QDockWidget plumbing. Legacy panels adapted as dock contents. `ui_v2` flag lit.
+4. **`feat(ui): SheetRail panel`** — thumbnails + scope-status persistence to `cache/scope.json`.
+5. **`feat(ui): DataTable migration`** — `QTableView` + `QAbstractTableModel` + StatusPill column + confidence pills + yellow-confirm flow. Adds `confirmed: bool` to `QTORow`.
+6. **`feat(ui): trace-back overlay`** — `TraceLink` controller + `bbox` on `QTORow` + canvas highlight + table jump.
+
+**Phase 2 (commits 7–10):**
+
+7. **`feat(ui): What-Changed workspace tab`** — promote `set_diff_view.py`, add $-impact column.
+8. **`feat(ui): command palette ⌘K`** — global shortcut, fuzzy index over rows/sheets/divisions/commands.
+9. **`feat(ui): cockpit workspace`** — division chart, markup sliders, exclusions, deadline.
+10. **`feat(ui): drag-and-drop reclassify + risk flag pills`**.
+
+**Phase 3 (commits 11–12):**
+
+11. **`feat(ui): coverage workspace + calibration manager`**.
+12. **`feat(ui): detail bubble preview, flip ui_v2 default to true, delete ui/legacy/`**.
+
+Time estimate: ~12 working days. Phase 1 is ~6 days and lands the bulk of the visual transformation. Phase 1 alone is shippable as "v2 beta".
 
 ## Verification
 
-**Unit (per commit):**
-- `tests/test_providers.py` — mock `httpx`, assert NVIDIA payload shape, assert reranker hits the *different* base URL, assert capability errors raise correctly.
-- `tests/test_agents.py` — fake `Provider` returning canned strings; assert each agent parses output correctly into typed result.
-- `tests/test_multi_agent_client.py` — instantiate with both providers mocked; call all 14 methods; assert routing matches config.
+**Visual regression** — golden screenshots at fixed states (empty workspace, mid-extraction with 3 pages done, 200-row takeoff loaded, cockpit with sample data, diff tab open). Captured via `QWidget.grab()` in headless `pytest-qt` test, compared with small SSIM tolerance. Six screenshots × 2 themes = 12 fixtures.
 
-**Integration:**
-- `tests/test_multi_agent_integration.py` — runs `Assembler.process_page` against `tests/fixtures/HBT_drawings.pdf` with `extraction_mode: multi_agent` and a mocked NVIDIA HTTP layer. Assertions:
-  - Row count regression: `abs(len(rows_multi_agent) - len(rows_hybrid)) <= 0.10 * len(rows_hybrid)` — within ±10%.
-  - Confidence histogram: `sum(1 for r in rows if r.confidence >= 0.75) / len(rows) >= 0.60` — at least 60% above review threshold.
-  - **Do not** assert exact descriptions — different models will produce different exact text.
+**Manual flow checklist** (each phase):
+- Load PDF → sheet rail populates → click sheet → canvas jumps.
+- Click row → canvas highlights bbox; click bbox → row scrolls + highlights.
+- Confirm row (Y key) → row turns yellow → persists across reload.
+- ⌘K → type sheet number → enter → canvas jumps.
+- Detach PDF dock → drag to second monitor → resize → reattach → state persists across restart.
+- Toggle theme → all components re-render without ghosting.
+- Open Compare → diff tab opens → re-extract → rows merge.
 
-**Live smoke (manual, gated by env var):**
-- `pytest.mark.skipif(not os.environ.get("NVIDIA_API_KEY"), ...)` test that hits real NVIDIA `/chat/completions` with `nemotron-mini-4b` on a one-line input. Catches "URL/auth/model name moved" before users find it.
+**Performance benchmarks** (`tests/test_perf.py`):
+- DataTable scroll over 10k synthetic rows holds 60fps.
+- PDF canvas first-paint of 500-page PDF under 800ms.
+- Theme toggle under 150ms on 2k-row table.
 
-**Manual end-to-end:**
-1. Set `NVIDIA_API_KEY` in env.
-2. Set `extraction_mode: multi_agent` in `config.yaml`.
-3. Run `python main.py`, open `tests/fixtures/HBT_drawings.pdf`.
-4. Verify: cost meter shows NVIDIA token usage, low-confidence rows get reviewed, exported XLSX matches the GC template structure.
-5. Toggle back to `extraction_mode: hybrid`, re-run same PDF, confirm output is identical to pre-refactor (regression check).
+**Existing test suite** — 141 tests pass automatically (none touch `ui/`).
 
-## Open Question (Defer)
+**Multi-monitor** — manual only; document steps in PR.
 
-**Orchestrator timing — per-page or end-of-run batched?** This plan picks **end-of-run** (reuses `flush_batched_compose` hook, costs one batch per PDF, zero churn to `process_page`). Per-page would give Claude fresher context but requires touching `process_page` and breaks the "smallest diff" goal. If row quality after end-of-run review is poor, revisit and add a per-page hook in `_make_row`.
+## Risks (Flagged Explicitly)
+
+1. **`QTableWidget` → `QTableView` migration is non-trivial.** Editable cells, context menu, filter bar, save-as-assembly hookups all replumb against the model layer. Budget 1.5 days, not 0.5. If we don't do this, the 10k-row claim is fiction. Commit 5 is the riskiest single commit.
+2. **Geist license** — Vercel ships Geist under SIL OFL 1.1; safe for embedding. Include `assets/fonts/Geist/LICENSE.txt` in the commit. No legal risk.
+3. **Light mode on PDF canvas** — PyMuPDF page renders are RGB bitmaps regardless of theme. The canvas background stays near-white in both modes (no inversion). Trace-back overlay color uses `confirmed-yellow` at 35% alpha for highlight, not brand amber, since amber is hard to see on white.
+4. **`QDockWidget` floating across monitors with different DPIs** can stutter on macOS. Test on user's actual hardware before committing.
+5. **Single-accent rule reconciliation** — Amber brand + yellow confirmed + pink revision + green approved is technically multi-color. Justification: brand accent governs interactive chrome (buttons, focus rings, links); domain semantics govern data state. Codified in `theme/tokens.py` docstring: "Never use amber for data state. Never use yellow/pink/green for interactive chrome."
+6. **qtawesome Phosphor pack** — bundled in `qtawesome>=1.3`. If a specific Phosphor glyph is missing, fall back to MaterialDesignIcons (also bundled). The `icon()` wrapper in `ui/theme/icons.py` resolves the fallback transparently so call sites don't change.
+7. **Excel round-trip and inline AI suggestions are NOT in this plan.** Both are XL effort and not necessary for the redesign goal. Land as separate tickets later.
+
+## Open Question (Defer to Implementation)
+
+**Cockpit "Regenerate proposal" button — `.docx` export.** Phase 1 ships the cockpit *view* with the button as a stub that opens a "coming soon" modal. The actual `.docx` proposal generation lives in Phase 2 or a separate ticket — depends on whether the user has a proposal template to mirror (analogous to `ESTIMATE_FORMAT___GC.xlsx` for estimates).

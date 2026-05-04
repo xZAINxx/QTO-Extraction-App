@@ -1,4 +1,4 @@
-extraction_mode: hybrid   # hybrid | claude_only | multi_agent
+extraction_mode: multi_agent
 ui_v2: true    # New modern UI is now the default. Set to false for the legacy 2018-era UI (deprecated, removed in a future release).
 
 anthropic_api_key: ""
