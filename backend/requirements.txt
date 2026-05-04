@@ -1,0 +1,6 @@
+# FastAPI shell deps. Domain logic comes from the repo-root requirements.txt
+# (PyMuPDF, anthropic, openpyxl, etc.), which the dev script also installs.
+fastapi>=0.118.0
+uvicorn[standard]>=0.40.0
+python-dotenv>=1.0.0
+pyyaml>=6.0

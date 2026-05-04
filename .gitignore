@@ -41,3 +41,11 @@ Thumbs.db
 
 # pytest
 .pytest_cache/
+
+# Web frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Dev-launcher logs
+.dev-logs/

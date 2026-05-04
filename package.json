@@ -2,16 +2,21 @@
   "name": "qto-tool",
   "version": "0.1.0",
   "private": true,
-  "description": "Zeconic QTO Extraction Tool — PyQt6 desktop app that extracts Quantity Takeoff line items from architectural PDFs and exports to a GC estimate Excel template.",
+  "description": "Zeconic QTO Extraction Tool — multi-agent quantity takeoff for construction drawings. Ships as a PyQt6 desktop app and (in development) a Vite + FastAPI web app.",
   "scripts": {
-    "dev": "./venv/bin/python3 main.py",
-    "start": "python3 main.py",
-    "install:py": "python3 -m pip install -r requirements.txt",
+    "dev": "bash scripts/dev-start.sh",
+    "dev:desktop": "./venv/bin/python3 main.py",
+    "dev:backend": "APP_ENV=development uvicorn backend.main:app --host 127.0.0.1 --port 8042 --reload",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:frontend": "cd frontend && npm install && npm run build",
+    "start": "bash scripts/dev-start.sh",
+    "install:py": "python3 -m pip install -r requirements.txt -r backend/requirements.txt",
+    "install:web": "cd frontend && npm install",
     "venv": "python3 -m venv venv",
     "test": "python3 -m pytest tests/ -v",
     "test:smoke": "python3 -m pytest tests/test_extractor.py -v",
     "lint": "python3 -m pyflakes . || true",
-    "clean": "rm -rf output cache __pycache__ .pytest_cache && find . -type d -name __pycache__ -prune -exec rm -rf {} +"
+    "clean": "rm -rf output cache .dev-logs __pycache__ .pytest_cache frontend/dist && find . -type d -name __pycache__ -prune -exec rm -rf {} +"
   },
   "repository": {
     "type": "git",
@@ -20,6 +25,7 @@
   "author": "Zeconic",
   "license": "UNLICENSED",
   "engines": {
-    "python": ">=3.11"
+    "python": ">=3.11",
+    "node": ">=20"
   }
 }
