@@ -15,6 +15,8 @@ import {
   Settings as SettingsIcon,
   CircleDot,
 } from 'lucide-react'
+import SignInGate from './auth/SignInGate.jsx'
+import { useApi } from './hooks/useApi.js'
 import './App.css'
 
 /**
@@ -40,14 +42,11 @@ export default function App() {
   const [info, setInfo] = useState(null)
   const [activeWorkspace, setActiveWorkspace] = useState('takeoff')
   const [error, setError] = useState(null)
+  const { apiFetch } = useApi()
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/info')
-      .then((r) => {
-        if (!r.ok) throw new Error(`/api/info returned ${r.status}`)
-        return r.json()
-      })
+    apiFetch('/api/info')
       .then((data) => {
         if (!cancelled) setInfo(data)
       })
@@ -57,26 +56,28 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [apiFetch])
 
   return (
-    <div className="app-shell">
-      <Topbar info={info} />
-      <div className="app-body">
-        <SideNav
-          activeWorkspace={activeWorkspace}
-          onSelect={setActiveWorkspace}
-        />
-        <main className="workspace">
-          <WorkspaceContent
-            workspace={activeWorkspace}
-            info={info}
-            error={error}
+    <SignInGate>
+      <div className="app-shell">
+        <Topbar info={info} />
+        <div className="app-body">
+          <SideNav
+            activeWorkspace={activeWorkspace}
+            onSelect={setActiveWorkspace}
           />
-        </main>
+          <main className="workspace">
+            <WorkspaceContent
+              workspace={activeWorkspace}
+              info={info}
+              error={error}
+            />
+          </main>
+        </div>
+        <StatusStrip info={info} error={error} />
       </div>
-      <StatusStrip info={info} error={error} />
-    </div>
+    </SignInGate>
   )
 }
 

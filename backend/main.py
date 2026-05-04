@@ -47,6 +47,10 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
+from backend.db import dispose_engine, init_engine  # noqa: E402
+from backend.middleware.auth import SupabaseAuthMiddleware  # noqa: E402
+from backend.routes.me import router as me_router  # noqa: E402
+
 
 APP_ENV = os.environ.get("APP_ENV", "production").lower()
 
@@ -97,6 +101,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Order matters: ``add_middleware`` prepends to ``app.user_middleware``,
+# and Starlette wraps the stack so that the EARLIEST-added middleware is
+# the OUTERMOST. Adding CORS first means it sees the request first — and
+# it short-circuits preflight ``OPTIONS`` before auth ever runs, which is
+# what the React client needs.
+app.add_middleware(SupabaseAuthMiddleware)
+
+
+# ── Lifecycle ───────────────────────────────────────────────────────────
+
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    """Build the async DB engine once before serving the first request."""
+    init_engine()
+
+
+@app.on_event("shutdown")
+async def _on_shutdown() -> None:
+    """Tear the engine down cleanly so pooled connections are returned."""
+    await dispose_engine()
 
 
 # ── /api routes ─────────────────────────────────────────────────────────
@@ -171,6 +197,11 @@ def extraction_modes() -> dict:
             },
         ],
     }
+
+
+# Authenticated profile endpoint. Mounted before the SPA fallthrough so
+# the catch-all ``/{path:path}`` route below can't shadow ``/api/me``.
+app.include_router(me_router)
 
 
 # ── SPA fallthrough (production single-port mode) ──────────────────────
