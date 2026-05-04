@@ -53,6 +53,17 @@ _SYSTEM_DIFF = (
     'If nothing meaningful changed reply EXACTLY: "no meaningful change".'
 )
 
+_SYSTEM_REVIEW = (
+    "You are reviewing low-confidence rows from an automated construction QTO extraction. "
+    "For each row in the input JSON array, assess whether the description, quantity, and units "
+    "look correct given the sheet context and extraction method. "
+    "Output ONLY a JSON array. Each element: "
+    '{"row_id": <int>, "verdict": "confirm"|"revise"|"reject", "revised_description": "<text, only when revise>"}. '
+    "Use 'confirm' if the row looks valid; 'revise' if the description should be improved (provide revised_description); "
+    "'reject' if the row appears spurious. Return one element per input row, in any order. "
+    "No markdown, no preamble, no explanation."
+)
+
 
 class AIClient:
     """Routes per-task to the cheapest model that handles it well."""
@@ -444,6 +455,84 @@ class AIClient:
             return resp.content[0].text.strip()
         except Exception:
             return ""
+
+    # ── Phase 8: end-of-run review of low-confidence rows ──────────────────
+
+    def review_low_confidence_rows(
+        self,
+        rows: list,
+        threshold: float = 0.75,
+    ) -> int:
+        """Sonnet pass over low-confidence rows; applies confirm/revise verdicts in-place.
+
+        Filters non-header rows below ``threshold``, batches them in groups of
+        ~20, asks Sonnet for a per-row verdict, and updates each row in
+        place. Returns count of rows whose verdict was applied
+        (confirm + revise). Rejected rows are left unchanged so the
+        validator can still flag them. Any API or JSON parse error is
+        swallowed and the method continues with the next chunk.
+        """
+        # Index-preserving filter: ``row_id`` is the original list index so
+        # in-place updates apply to the right row regardless of any
+        # reordering Sonnet performs in its response.
+        low_conf = [
+            (idx, row)
+            for idx, row in enumerate(rows)
+            if not row.is_header_row and row.confidence < threshold
+        ]
+        if not low_conf:
+            return 0
+
+        chunk_size = 20
+        applied = 0
+        for start in range(0, len(low_conf), chunk_size):
+            chunk = low_conf[start:start + chunk_size]
+            payload = [
+                {
+                    "row_id": idx,
+                    "description": row.description,
+                    "qty": row.qty,
+                    "units": row.units,
+                    "sheet": row.source_sheet,
+                    "method": row.extraction_method,
+                    "confidence": row.confidence,
+                }
+                for idx, row in chunk
+            ]
+            try:
+                raw = self._call(
+                    self._sonnet,
+                    _SYSTEM_REVIEW,
+                    [{"role": "user", "content": json.dumps(payload, separators=(",", ":"))}],
+                    max_tokens=1500,
+                )
+                verdicts = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(verdicts, list):
+                continue
+            for verdict in verdicts:
+                if not isinstance(verdict, dict):
+                    continue
+                row_id = verdict.get("row_id")
+                if not isinstance(row_id, int) or row_id < 0 or row_id >= len(rows):
+                    continue
+                kind = verdict.get("verdict")
+                target = rows[row_id]
+                if kind == "confirm":
+                    target.confidence = 0.9
+                    target.needs_review = False
+                    applied += 1
+                elif kind == "revise":
+                    revised = verdict.get("revised_description")
+                    if isinstance(revised, str) and revised.strip():
+                        target.description = revised
+                    target.confidence = 0.9
+                    target.needs_review = False
+                    target.extraction_method = "reviewed"
+                    applied += 1
+                # "reject" → leave row unchanged
+        return applied
 
 
 def _keyword_classify(description: str, keywords: dict) -> str:
