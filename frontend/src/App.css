@@ -1555,3 +1555,196 @@
   color: var(--text-3);
   margin: 0;
 }
+
+/* ── Cost popover ─────────────────────────────────────────────────── */
+
+.cost-popover-wrap {
+  position: relative;
+}
+
+.topbar-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.topbar-icon-btn:hover {
+  background: var(--surface-3);
+  border-color: var(--border-default);
+  color: var(--text-1);
+}
+
+.cost-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
+  padding: 16px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cost-popover__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cost-popover__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.cost-popover__close {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.cost-popover__empty {
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 8px 0;
+}
+
+.cost-popover__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.cost-popover__metric {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.cost-popover__metric-value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.cost-popover__metric-label {
+  font-size: 10px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+
+.cost-popover__by-model {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cost-popover__section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.cost-popover__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+
+.cost-popover__row:last-child {
+  border-bottom: none;
+}
+
+.cost-popover__model {
+  color: var(--text-1);
+  font-weight: 500;
+}
+
+.cost-popover__row-meta {
+  font-family: var(--font-mono);
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.cost-popover__divider {
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.cost-popover__toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cost-popover__toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.cost-popover__toggle-help {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.toggle {
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-3);
+  position: relative;
+  cursor: pointer;
+  transition: background 140ms ease;
+  flex-shrink: 0;
+}
+
+.toggle--on {
+  background: var(--emerald);
+  border-color: var(--emerald);
+}
+
+.toggle__thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--text-1);
+  transition: transform 140ms ease;
+}
+
+.toggle--on .toggle__thumb {
+  transform: translateX(14px);
+  background: #FFFFFF;
+}

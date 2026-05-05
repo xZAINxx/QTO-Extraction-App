@@ -19,6 +19,7 @@ import SignInGate from './auth/SignInGate.jsx'
 import DataTable from './components/DataTable.jsx'
 import { apiFetch, useApi } from './hooks/useApi.js'
 import { useExtractionStream } from './hooks/useExtractionStream.js'
+import CostPopover from './panels/CostPopover.jsx'
 import ProjectSwitcher from './panels/ProjectSwitcher.jsx'
 import UploadDropzone from './panels/UploadDropzone.jsx'
 import useProjectStore from './stores/projectStore.js'
@@ -139,6 +140,7 @@ function Topbar({ info }) {
 
       <div className="topbar__actions">
         <ModeBadge mode={mode} />
+        <CostPopover />
         <button className="btn btn--amber" type="button">
           <Sparkles size={14} />
           <span>Ask QTO AI</span>
