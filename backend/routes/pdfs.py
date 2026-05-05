@@ -278,6 +278,90 @@ async def delete_pdf(
         )
 
 
+@router.post(
+    "/api/pdfs/{pdf_id}/classify-pages",
+    response_model=dict,
+)
+async def classify_pdf_pages(
+    pdf_id: UUID,
+    user: Annotated[User, Depends(current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    """Run ``parser.pdf_splitter`` to classify every page in the PDF.
+
+    Caches the result on ``pdfs.page_classifications`` (JSONB) so the
+    Sheet rail can render groups (PLAN_DEMO / PLAN_CONSTRUCTION /
+    SCHEDULE / DETAIL_WITH_SCOPE / etc) without rerunning the
+    classification on every request.
+
+    Returns ``{counts: {<page_type>: int}, by_page: {<page_num>: {…}}}``
+    so the frontend can render group cards + a per-sheet roster.
+
+    Wraps the desktop's parser/pdf_splitter.py:split_and_classify
+    (already used by the extraction worker) — same source of truth.
+    """
+    pdf = await _load_pdf_owned(pdf_id, user, db)
+
+    def _classify_blocking(local_path: str) -> dict:
+        # Late import — the splitter pulls in fitz / cv2 which we
+        # don't want at app boot time.
+        from parser.pdf_splitter import split_and_classify
+
+        by_page: dict[str, dict] = {}
+        counts: dict[str, int] = {}
+        for _page, page_info in split_and_classify(local_path):
+            by_page[str(page_info.page_num)] = {
+                "page_type": page_info.page_type,
+                "skip": bool(page_info.skip),
+                "skip_reason": page_info.skip_reason,
+                "sheet_id": getattr(page_info, "sheet_id", None) or "",
+                "text_preview": (page_info.text or "")[:120],
+            }
+            counts[page_info.page_type] = counts.get(page_info.page_type, 0) + 1
+        return {"counts": counts, "by_page": by_page}
+
+    try:
+        with storage.local_path(pdf.storage_key) as local:
+            result = await asyncio.to_thread(_classify_blocking, str(local))
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="storage unavailable",
+        ) from exc
+    except Exception as exc:
+        logger.exception("page classification failed for %s", pdf_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"classification failed: {exc}",
+        ) from exc
+
+    pdf.page_classifications = result["by_page"]
+    await db.commit()
+    return result
+
+
+@router.get("/api/pdfs/{pdf_id}/page-classifications", response_model=dict)
+async def get_pdf_page_classifications(
+    pdf_id: UUID,
+    user: Annotated[User, Depends(current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Return the cached page classifications for a PDF.
+
+    Returns ``{counts: {}, by_page: {}}`` with empty dicts if the PDF
+    hasn't been classified yet. Frontends can show a "Classify pages"
+    button to trigger ``POST /api/pdfs/{id}/classify-pages``.
+    """
+    pdf = await _load_pdf_owned(pdf_id, user, db)
+    by_page = pdf.page_classifications or {}
+    counts: dict[str, int] = {}
+    for entry in by_page.values():
+        page_type = entry.get("page_type", "UNKNOWN")
+        counts[page_type] = counts.get(page_type, 0) + 1
+    return {"counts": counts, "by_page": by_page}
+
+
 @router.get("/api/pdfs/{pdf_id}/signed-url", response_model=SignedUrlOut)
 async def get_pdf_signed_url(
     pdf_id: UUID,

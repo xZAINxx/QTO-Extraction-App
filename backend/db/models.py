@@ -182,6 +182,13 @@ class Pdf(Base):
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    # Per-page classification cache populated by ``parser.pdf_splitter``.
+    # Shape: ``{"<page_num>": {"page_type": "...", "skip": bool, "sheet_id": "..."}}``.
+    # Drives the page-grouping UI on the Sheet rail and the
+    # "extract only the demo plans" filter on POST /api/extractions.
+    page_classifications: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
