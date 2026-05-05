@@ -50,6 +50,8 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from backend.db import dispose_engine, init_engine  # noqa: E402
 from backend.middleware.auth import SupabaseAuthMiddleware  # noqa: E402
 from backend.routes.me import router as me_router  # noqa: E402
+from backend.routes.pdfs import router as pdfs_router  # noqa: E402
+from backend.routes.projects import router as projects_router  # noqa: E402
 
 
 APP_ENV = os.environ.get("APP_ENV", "production").lower()
@@ -199,9 +201,11 @@ def extraction_modes() -> dict:
     }
 
 
-# Authenticated profile endpoint. Mounted before the SPA fallthrough so
-# the catch-all ``/{path:path}`` route below can't shadow ``/api/me``.
+# Authenticated routes. Mounted before the SPA fallthrough so the catch-all
+# ``/{path:path}`` route below can't shadow ``/api/*``.
 app.include_router(me_router)
+app.include_router(projects_router)
+app.include_router(pdfs_router)
 
 
 # ── SPA fallthrough (production single-port mode) ──────────────────────

@@ -8,15 +8,18 @@ import {
   GitCompareArrows,
   Gauge,
   Eye,
+  FileText,
   FolderOpen,
   Upload,
-  Wrench,
   PaintBucket,
   Settings as SettingsIcon,
   CircleDot,
 } from 'lucide-react'
 import SignInGate from './auth/SignInGate.jsx'
 import { useApi } from './hooks/useApi.js'
+import ProjectSwitcher from './panels/ProjectSwitcher.jsx'
+import UploadDropzone from './panels/UploadDropzone.jsx'
+import useProjectStore from './stores/projectStore.js'
 import './App.css'
 
 /**
@@ -96,7 +99,7 @@ function Topbar({ info }) {
         <div className="topbar__breadcrumb">
           <span className="topbar__product">Zeconic QTO</span>
           <ChevronRight className="topbar__chevron" size={14} />
-          <span className="topbar__crumb">Untitled Project</span>
+          <ProjectSwitcher />
           <ChevronRight className="topbar__chevron" size={14} />
           <span className="topbar__crumb topbar__crumb--active">Takeoff</span>
         </div>
@@ -191,14 +194,21 @@ function WorkspaceContent({ workspace, info, error }) {
 
 function TakeoffWorkspace({ info }) {
   const ready = info != null
+  const pdfs = useProjectStore((s) => s.pdfs)
+  const activeProjectId = useProjectStore((s) => s.activeProjectId)
+  const projects = useProjectStore((s) => s.projects)
+  const activeProject = projects.find((p) => p.id === activeProjectId)
+
   return (
     <div className="content">
       <div className="content__header">
         <div>
           <h1 className="content__title">Takeoff</h1>
           <p className="content__subtitle">
-            Upload a drawing set to extract Quantity Takeoff line items.
-            The current extraction mode is{' '}
+            {activeProject
+              ? `Project ${activeProject.name} · upload a drawing set to extract line items.`
+              : 'Pick a project from the topbar (or create one), then drop a PDF to extract line items.'}
+            {' '}The current extraction mode is{' '}
             <code className="inline-code">{info?.extraction_mode ?? '—'}</code>.
           </p>
         </div>
@@ -209,26 +219,28 @@ function TakeoffWorkspace({ info }) {
         </div>
       </div>
 
-      <section className="empty-card">
-        <div className="empty-card__icon" aria-hidden>
-          <Upload size={20} />
-        </div>
-        <h2 className="empty-card__title">No takeoff yet</h2>
-        <p className="empty-card__body">
-          Drop a PDF anywhere on this window, or click below to start a new
-          extraction. Your drawings stay on this machine — no cloud uploads.
-        </p>
-        <div className="empty-card__actions">
-          <button className="btn btn--emerald" type="button">
-            <Upload size={14} />
-            <span>Upload PDF</span>
-          </button>
-          <button className="btn btn--ghost" type="button">
-            <Wrench size={14} />
-            <span>Open recent</span>
-          </button>
-        </div>
-      </section>
+      <UploadDropzone />
+
+      {pdfs.length > 0 && (
+        <section className="pdf-list">
+          <div className="pdf-list__header">
+            <h3 className="pdf-list__title">Uploaded PDFs</h3>
+            <span className="pdf-list__count">{pdfs.length}</span>
+          </div>
+          <div className="pdf-list__rows">
+            {pdfs.map((p) => (
+              <div key={p.id} className="pdf-list__row">
+                <FileText size={14} className="pdf-list__icon" />
+                <div className="pdf-list__name">{p.filename}</div>
+                <div className="pdf-list__meta">
+                  {p.page_count ? `${p.page_count} pp` : '—'} ·{' '}
+                  {(p.byte_size / 1024 / 1024).toFixed(1)} MB
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="status-card">
         <div className="status-card__row">

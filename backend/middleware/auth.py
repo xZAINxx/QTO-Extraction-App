@@ -153,6 +153,16 @@ class SupabaseAuthMiddleware(BaseHTTPMiddleware):
 # ── Dependencies ────────────────────────────────────────────────────────
 
 
+# Stable dev-mode user UUID. When ``SUPABASE_JWT_SECRET`` is empty the
+# middleware lets requests through without setting ``user_id``; this
+# dependency then provisions / reuses a single deterministic user so
+# the rest of the app (projects, uploads, extractions) works end-to-end
+# without a Supabase project. The UUID is namespaced ``decaf...`` so
+# it stands out in DB dumps as "this is the local dev user".
+_DEV_USER_ID = UUID("decaf000-0000-0000-0000-000000000a00")
+_DEV_USER_EMAIL = "dev@localhost"
+
+
 async def current_user(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -164,6 +174,12 @@ async def current_user(
     sight (keyed by Supabase's ``auth.users.id`` so RLS policies can
     use ``auth.uid()`` directly without a join).
 
+    Dev-mode fallback: when Supabase isn't configured (the middleware
+    short-circuits and ``request.state.user_id`` is unset), we
+    transparently swap in :data:`_DEV_USER_ID` so authenticated routes
+    keep working. The frontend's auth-banner already warns the operator
+    that they're in dev mode; nothing here is silent.
+
     Usage::
 
         @router.get("/me")
@@ -171,16 +187,21 @@ async def current_user(
             return {"id": str(user.id), "email": user.email}
     """
     user_id: UUID | None = getattr(request.state, "user_id", None)
-    if user_id is None:
-        # Defensive — the middleware should have rejected this request
-        # already. Reaching here means a route was mounted on a public
-        # path or the middleware was bypassed.
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="not authenticated",
-        )
-
     user_email: str | None = getattr(request.state, "user_email", None)
+
+    if user_id is None:
+        # Dev-mode fallback — only when Supabase isn't configured.
+        # In production with a real JWT secret this path never runs
+        # because the middleware already 401'd unauth'd requests.
+        settings = get_settings()
+        if not settings.supabase_jwt_secret:
+            user_id = _DEV_USER_ID
+            user_email = _DEV_USER_EMAIL
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="not authenticated",
+            )
 
     try:
         result = await db.execute(select(User).where(User.id == user_id))

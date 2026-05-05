@@ -4,6 +4,8 @@ fastapi>=0.118.0
 uvicorn[standard]>=0.40.0
 python-dotenv>=1.0.0
 pyyaml>=6.0
+# Multipart-form support — required by FastAPI's UploadFile (PDF upload route).
+python-multipart>=0.0.20
 
 # ── DB / persistence (commit 1) ────────────────────────────────────────
 # SQLAlchemy 2.0 in async mode + asyncpg driver targeting the Supabase-
