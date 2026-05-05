@@ -1,0 +1,34 @@
+# Local Postgres for QTO web dev. Brought up by `npm run db:up` (added to
+# root package.json in commit 1). Production points at managed Supabase
+# Postgres via `SUPABASE_DB_URL`; this compose file is dev-only.
+#
+# Port 5532 is non-default (vs Postgres's 5432) so it coexists with any
+# other Postgres a developer already runs locally — same idea as the QTO
+# web ports (8042 / 5142) avoiding the CPM defaults.
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml down
+#   docker compose -f docker-compose.dev.yml logs -f postgres
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: qto-postgres-dev
+    restart: unless-stopped
+    ports:
+      - "5532:5432"
+    environment:
+      POSTGRES_USER: qto
+      POSTGRES_PASSWORD: qto
+      POSTGRES_DB: qto
+    volumes:
+      - qto-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qto -d qto"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  qto-pg-data:

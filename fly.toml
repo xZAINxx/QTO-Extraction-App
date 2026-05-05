@@ -1,0 +1,39 @@
+# Fly.io app config — single region, single machine, sticky sessions
+# (so SSE channels survive without sticky load-balancing).
+#
+# Bring up:
+#   fly launch --no-deploy        # creates the app
+#   fly secrets set ANTHROPIC_API_KEY=… NVIDIA_API_KEY=… SUPABASE_URL=… \
+#                  SUPABASE_ANON_KEY=… SUPABASE_SERVICE_ROLE_KEY=… \
+#                  SUPABASE_JWT_SECRET=… DATABASE_URL=…
+#   fly deploy
+
+app = "zeconic-qto"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  APP_ENV = "production"
+  STORAGE_BACKEND = "supabase"
+
+[http_service]
+  internal_port = 8765
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory = "1gb"

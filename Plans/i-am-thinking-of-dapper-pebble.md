@@ -1,275 +1,649 @@
-# Multi-Agent Refactor — QTO Extraction Tool
+# QTO Web — Multi-Tenant Feature Wiring
 
 ## Context
 
-The Zeconic QTO tool currently uses Claude (Anthropic) as the sole AI for every step: page-type classification, vision extraction, text parsing, CSI classification, and description normalization. Token spend is dominated by Sonnet vision crops on legends/schedules and Sonnet `compose_description` calls (one per row). The user wants to shift the heavy-lift inference to cheaper/faster NVIDIA NIM models (Nemotron-Mini, Llama-4-Maverick, Mistral-Nemotron, NV-Embed, NV-Rerank) and reserve Claude for orchestration and review of low-confidence rows. The refactor must be **additive** — existing `hybrid` and `claude_only` modes must keep working unchanged so we can A/B-compare cost/quality.
+PR #2 shipped the QTO web stack scaffold (Vite + FastAPI mirroring CPM). The current frontend renders a Takeoff workspace, side nav, topbar, and a backend health card — but four named pieces are intentionally stubbed:
 
-## Mental-Model Corrections
+1. **Upload PDF** button is visual only — no ingest route, no extraction trigger.
+2. **Mode badge** in the topbar shows `MULTI_AGENT` but isn't clickable on the web (it is on PyQt6).
+3. **What Changed / Cockpit / Coverage** workspace tabs are deliberate "coming next" cards rather than ports of the PyQt6 widgets.
+4. **Cost / token meters** are deferred entirely (the original critique flagged them as debugging UI in the bottom strip).
 
-The refactor brief named files that do not exist as separate modules:
+The user wants those wired in **AND** wants the same codebase deployable as a hosted multi-tenant SaaS (alongside the local desktop app, which stays in PyQt6 and is untouched). Decisions captured via AskUserQuestion this turn:
 
-- **`csi_classifier.py` does not exist.** CSI logic lives in [ai/client.py:185](ai/client.py:185) `classify_csi()` (marked "kept for backward compat post-Step-11" — no live callers). The new agent revives this surface as a real, used component.
-- **`description_normalizer.py` does not exist.** GC-format normalization is [ai/description_composer.py](ai/description_composer.py) (the `_SYSTEM` prompt + 13 few-shots) plus [ai/client.py:207](ai/client.py:207) `compose_description()` invoked per row from [core/assembler.py:266](core/assembler.py:266). The new agent swaps *who answers `compose_description`*, no new file required.
-- **`pdf_splitter.py` makes zero AI calls.** Page classification is pure text heuristics ([parser/pdf_splitter.py:39](parser/pdf_splitter.py:39)). `AIClient.classify_page_type()` ([ai/client.py:149](ai/client.py:149)) exists but has no production caller. Adding a NIM agent here is *new behavior*, not a swap. Recommendation: keep heuristics as fast-path, call the NIM agent only when the heuristic returns the default fallback (`PLAN_CONSTRUCTION`).
-- **No RAG / vector store exists.** [core/cache.py](core/cache.py) is a single-table SQLite extractions store keyed by PDF fingerprint. The historical line-item store is greenfield.
-- **No agent abstraction exists.** All extractors are module-level functions taking an `ai_client`. Class-based agents would be inconsistent — go function-based.
+| Question | Decision |
+|---|---|
+| Phasing | **Multi-tenant from day 1** |
+| Auth + storage + DB | **Supabase (one vendor)** — switched from Clerk because Clerk is auth-only; we need object storage too. Supabase consolidates auth + Postgres + S3-compatible storage under one project. |
+| PDF storage | **Persistent per-project workspace** (Supabase Storage bucket, server-side signed URLs) |
+| Implementation cadence | **Parallel sub-agents** for independent commits (frontend ↔ backend can land in parallel) |
 
-## Design Decisions
+The PyQt6 desktop app continues to work as-is (local config.yaml, local cache/). The web app is a separate surface with its own state store; the two share the same `core/`, `ai/`, `parser/`, `cv/` modules and the same `requirements.txt`.
 
-### 1. Provider Abstraction — `ai/providers/`
+---
 
-New package, three files. Use a `Protocol` with **capability flags**, not a symmetric ABC, to honor the real asymmetry (Anthropic has caching+batches; NVIDIA has embeddings+rerank).
+## Pipeline Reality Check (From Exploration)
+
+The Python pipeline is **NOT** designed for the FastAPI async model. From `core/rag_store.py:42` and `ai/client.py:84-87`:
+
+- `HistoricalStore` SQLite connection is single-threaded by design.
+- `AIClient._compose_cache` and `_classify_cache` are non-thread-safe dicts.
+- `Assembler.process_page` (`core/assembler.py:59`) calls `fitz.open` and Anthropic API calls synchronously — it blocks for seconds per page.
+
+Concrete consequences for the web design:
+
+- Wrap every extraction call in `asyncio.to_thread(...)` so it runs on the threadpool, not the event loop.
+- One extraction per user at a time. A per-user `asyncio.Lock` + a global semaphore of 3 concurrent jobs.
+- One `MultiAgentClient` / `AIClient` instance **per extraction job** (do not share across jobs — caches will collide). Construct fresh per job.
+- One `HistoricalStore` connection per job; close on completion. RAG seed data stays read-mostly so cross-job reads are fine.
+
+`QTORow` is fully JSON-serializable (`core/qto_row.py:4-44`), no datetime/numpy fields → safe for `dataclasses.asdict()` over the wire.
+
+`TokenTracker.on_update` (`core/token_tracker.py:120-174`) fires synchronously per API call — drain it via `asyncio.Queue` and forward as SSE.
+
+---
+
+## Architecture
 
 ```
-ai/providers/
-  __init__.py
-  base.py              # Provider protocol + ProviderCapabilityError
-  anthropic_provider.py
-  nvidia_provider.py
+┌─── frontend/ (Vite + React 19) ──────────────────────────────────┐
+│  <SupabaseProvider> → useSession() → fetch /api/* with Bearer    │
+│  zustand stores: project, extraction-job, rows, cost-stream      │
+│  Components:                                                     │
+│    UploadDropzone, ModePickerMenu, CostPopover                   │
+│    workspaces/{Takeoff, WhatChanged, Cockpit, Coverage}.jsx      │
+└──────────────────────────────────────────────────────────────────┘
+                            │  /api/* (Vite proxy in dev,
+                            │   single-port in prod)
+                            ▼
+┌─── backend/ (FastAPI + uvicorn) ─────────────────────────────────┐
+│  middleware/auth.py  Verify Supabase JWT (jwks public-key check) │
+│                      → request.state.user (DB row)               │
+│  routes/{me, projects, uploads, extractions, rows,               │
+│          extraction_modes, costs, diff, cockpit, coverage}       │
+│  services/                                                        │
+│    storage.py     SupabaseStorage (default) | LocalDiskStorage   │
+│    jobs.py        JobRunner (asyncio + per-user lock + semaphore)│
+│    sse.py         AsyncQueue → text/event-stream                 │
+│  db/                                                              │
+│    models.py (SQLAlchemy 2.0)                                    │
+│    migrations/   (Alembic)                                        │
+│  domain (untouched, imported as-is): ai/, core/, parser/, cv/    │
+└──────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─── Supabase Project ─────────────────────────────────────────────┐
+│  Auth   — email/magic-link + OAuth (Google/GitHub)               │
+│  DB     — Postgres (users · projects · pdfs · extractions ·      │
+│           qto_rows · token_events)                                │
+│  Storage— bucket "qto-pdfs" with RLS keyed on user_id            │
+│  Local  — `supabase start` runs all three locally via Docker     │
+│  Prod   — managed Supabase (free tier → Pro $25/mo at growth)    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-Interface:
+---
+
+## Decisions (Recommended Path)
+
+### 1. Auth — Supabase Auth
+
+- **Frontend**: `@supabase/supabase-js` + `@supabase/auth-ui-react` for the sign-in card. `useSession()` provides the JWT; injected into every `fetch('/api/*', { headers: Authorization: 'Bearer ${jwt}' })`. Magic-link email + Google OAuth enabled by default; password as fallback.
+- **Backend**: `supabase-py` for storage SDK; for auth we verify Supabase-issued JWTs locally via `pyjwt` against the project's JWKS endpoint — no extra round-trip per request. Middleware `middleware/auth.py` resolves the JWT's `sub` claim → SQLAlchemy `User` row (lazy-provision on first sight). FastAPI dependency `Depends(current_user)` gates every protected route.
+- **Env vars** (single Supabase project covers all three subsystems):
+  - `SUPABASE_URL` (e.g. `https://xxxx.supabase.co`)
+  - `SUPABASE_ANON_KEY` — public; safe to ship in the frontend bundle.
+  - `SUPABASE_SERVICE_ROLE_KEY` — server-only; bypasses RLS for backend storage operations.
+  - `SUPABASE_JWT_SECRET` — JWT signing secret for local verification.
+  - Frontend reads `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`.
+
+### 2. Storage — Supabase Storage (with pluggable abstraction)
+
+`backend/services/storage.py` defines:
 
 ```python
-class Provider(Protocol):
-    name: str
-    supports_caching: bool
-    supports_batches: bool
-    supports_vision: bool
-    supports_embeddings: bool
-    supports_reranking: bool
-
-    def chat(model, system, messages, max_tokens, *, cache_system=False, temperature=None) -> str
-    def vision(model, system, image_bytes, prompt, max_tokens, *, cache_system=False) -> str
-    def embed(model, texts) -> list[list[float]]
-    def rerank(model, query, passages) -> list[tuple[int, float]]
+class Storage(Protocol):
+    def put(self, key: str, data: bytes, *, content_type: str) -> None: ...
+    def get(self, key: str) -> bytes: ...
+    def local_path(self, key: str) -> Path: ...   # for fitz.open
+    def delete(self, key: str) -> None: ...
+    def signed_url(self, key: str, expires_in: int = 3600) -> str: ...
 ```
 
-- `AnthropicProvider` reuses logic from [ai/client.py:86](ai/client.py:86) `_call` and [ai/client.py:108](ai/client.py:108) `_vision_call`. `embed`/`rerank` raise `ProviderCapabilityError`.
-- `NvidiaProvider` uses `httpx.Client` against `https://integrate.api.nvidia.com/v1/chat/completions` (OpenAI-compatible) and `/embeddings`. Reranker hits the **separate** host `https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking`. `vision()` requires `model == "meta/llama-4-maverick-17b-128e-instruct"`. Sends image as base64 in OpenAI multimodal content array.
-- Both providers receive a `TokenTracker` and call `tracker.record(...)` so the cost meter stays honest.
+Two implementations:
+- `SupabaseStorage(client)` — **default for both dev and prod**. One bucket `qto-pdfs` with RLS policy `(auth.uid()::text = (storage.foldername(name))[1])` so users can only read their own folder. `local_path()` downloads to `/tmp/qto-{key.replace('/', '-')}` for `fitz.open`, deletes after extraction.
+- `LocalDiskStorage(root: Path)` — for self-hosted users running without Supabase. Same interface; selected via `STORAGE_BACKEND=local`.
 
-Add `httpx>=0.27` to [requirements.txt](requirements.txt) (already a transitive dep of `anthropic`; pin it).
+Bucket-key convention: `{user_id}/{project_id}/{pdf_id}/source.pdf`. Storage RLS + the SQL FK chain together provide defense-in-depth.
 
-### 2. Agent Layer — `ai/agents/` (function-based)
+### 3. Database — Supabase Postgres + SQLAlchemy 2.0 + Alembic
 
-```
-ai/agents/
-  __init__.py             # AgentContext dataclass
-  page_classifier.py      # classify_page(text, ctx) -> str
-  vision_extractor.py     # extract_from_image(image_bytes, prompt, ctx) -> str
-  text_extractor.py       # extract_from_text(text, prompt, ctx) -> list[dict]
-  csi_classifier.py       # classify(description, fallback_keywords, ctx) -> tuple[str, float]
-  description_normalizer.py # normalize(raw, sheet, keynote_ref, ctx) -> str
-  rag.py                  # prime_normalizer(raw, ctx) -> list[str]
-  orchestrator.py         # review_rows(rows, threshold, ctx) -> list[QTORow]
-```
+Supabase ships a managed Postgres. Locally, `supabase start` boots the whole stack (Postgres + Auth + Storage + Studio UI) in Docker. We connect from FastAPI via the connection-pooled `pgbouncer` URL Supabase exposes as `SUPABASE_DB_URL` — same SQLAlchemy code in dev and prod.
 
-`AgentContext` carries `providers: dict[str, Provider]`, `tracker`, `cache`, `agent_config: dict` (this agent's slice of `config["agents"]`), and `rag_store: Optional[HistoricalStore]`. Agents are stateless; caching lives in `MultiAgentClient`.
+Tables (full DDL in §"Schema" below):
+- `users` — Clerk subject ID + per-user prefs (extraction_mode default).
+- `projects` — name, deadline, markup defaults (for Cockpit), owner.
+- `pdfs` — filename, storage_key, page_count, byte_size, project_id.
+- `extractions` — status (pending|running|completed|failed|canceled), extraction_mode snapshot, cost_usd, started/finished timestamps, pdf_id.
+- `qto_rows` — full `QTORow` flattened, FK to extraction.
+- `token_events` — append-only log per `tracker.on_update`. Drives both the cost popover and historical billing.
+- `coverage_assertions` (Phase 2) — per-project sheet scope status.
 
-The normalizer reuses `ai.description_composer._SYSTEM` verbatim — that prompt is model-portable; only the inference call changes.
+`backend/db/session.py` — async SQLAlchemy engine + `get_db()` FastAPI dependency.
+`backend/db/migrations/` — Alembic. First migration creates all tables.
 
-### 3. Assembler Changes — Two Lines
+### 4. Job runner — asyncio + per-user lock
 
-Do **not** touch [core/assembler.py:59](core/assembler.py:59) `process_page()`. It only ever talks to `self._ai`, which is duck-typed. The dispatch happens upstream in [ui/main_window.py:88](ui/main_window.py:88):
+`backend/services/jobs.py`:
 
 ```python
-mode = self._config.get("extraction_mode", "hybrid")
-if mode == "multi_agent":
-    from ai.multi_agent_client import MultiAgentClient
-    ai = MultiAgentClient(self._config, tracker)
-else:
-    ai = AIClient(self._config, tracker)
-assembler = Assembler(self._config, ai, tracker)
+_USER_LOCKS: dict[UUID, asyncio.Lock] = {}
+_GLOBAL_SEMAPHORE = asyncio.Semaphore(3)   # tunable via MAX_CONCURRENT_JOBS
+
+async def run_extraction(extraction_id: UUID, user_id: UUID) -> None:
+    lock = _USER_LOCKS.setdefault(user_id, asyncio.Lock())
+    async with lock, _GLOBAL_SEMAPHORE:
+        await asyncio.to_thread(_blocking_run, extraction_id)
 ```
 
-Inside [core/assembler.py:325](core/assembler.py:325) `flush_batched_compose`, append a single hook for the orchestrator review (runs after Phase-7 batch flush, before sort/validate):
+`_blocking_run` is essentially `extraction_worker.run()` adapted: builds its own `TokenTracker`, picks `MultiAgentClient` vs `AIClient` per `extraction.extraction_mode`, calls `Assembler.process_page` in a loop, persists rows + token events to Postgres after each page.
 
-```python
-review = getattr(self._ai, "review_low_confidence_rows", None)
-if review is not None:
-    threshold = self._config.get("confidence_review_threshold", 0.75)
-    review(rows, threshold)
-```
+Progress is published via `asyncio.Queue` (one per extraction_id) so the SSE endpoint can `await queue.get()`.
 
-`process_page` and `_make_row` stay agnostic; they keep assigning method-based confidence at [assembler.py:281](core/assembler.py:281). The orchestrator revises `confidence` and (optionally) `description` in-place during the post-pass.
+This pattern survives a single uvicorn worker. Multi-worker requires Redis pub/sub for the queue (out of scope for v1; document as a known scaling limit).
 
-### 4. AIClient Refactor — Parallel Class, Not Facade
+### 5. Frontend state — zustand + react-query
 
-Leave [ai/client.py](ai/client.py) **exactly as-is**. Add [ai/multi_agent_client.py](ai/multi_agent_client.py) next to it.
+- `zustand` for ephemeral UI state (active workspace, selected project, modal toggles).
+- `@tanstack/react-query` for server cache (projects, rows, extraction status). Invalidate on SSE events.
+- SSE hook: `useExtractionStream(extractionId)` opens an `EventSource`, emits typed events, dispatches to react-query cache.
 
-Rationale: `AIClient` houses the working Phase-7 batch path (`_pending_compose`, `flush_pending_compose`), prompt-cache wiring, and `chat_over_rows`. Wrapping it in a facade risks breaking the 50% batch saving currently in production. A parallel class makes the multi-agent path additive and reversible (toggle `extraction_mode` back to `hybrid` at any time).
+---
 
-`MultiAgentClient` exposes the same 13-method public surface as `AIClient` plus a 14th: `review_low_confidence_rows`. Each method is a 1-line delegation to its agent. Phase-7 hooks (`cost_saver_mode`, `pending_compose_count`, `flush_pending_compose`) are stubbed as no-ops/`False`/`0` so `assembler.flush_batched_compose` doesn't crash on `getattr`.
+## Schema
 
-`chat_over_rows` and `describe_diff_cluster` stay on Anthropic even in `multi_agent` mode — they need prompt caching for repeated questions and the diff prompt is tuned for Sonnet.
-
-Add `review_low_confidence_rows` to **`AIClient` too** (~30 lines, routes to Sonnet) so `hybrid` mode also benefits from the orchestrator pass.
-
-### 5. Config Schema (Additive)
-
-All new keys; existing keys untouched. Append to [config.yaml](config.yaml):
-
-```yaml
-extraction_mode: hybrid     # extends existing enum: hybrid | claude_only | multi_agent
-
-providers:
-  anthropic:
-    api_key_env: ANTHROPIC_API_KEY
-  nvidia:
-    api_key_env: NVIDIA_API_KEY
-    chat_base_url: "https://integrate.api.nvidia.com/v1"
-    rerank_base_url: "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
-    timeout_s: 60
-
-agents:
-  page_classifier:
-    provider: nvidia
-    model: "nvidia/nemotron-mini-4b-instruct"
-    temperature: 0.0
-    max_tokens: 24
-    fast_path_heuristics: true
-  vision_extractor:
-    provider: nvidia
-    model: "meta/llama-4-maverick-17b-128e-instruct"
-    temperature: 0.0
-    max_tokens: 4000
-    fallback_provider: anthropic
-    fallback_model: claude-sonnet-4-6
-  text_extractor:
-    provider: nvidia
-    model: "mistralai/mistral-nemotron"
-    temperature: 0.0
-    max_tokens: 2000
-  csi_classifier:
-    provider: nvidia
-    model: "nvidia/nemotron-mini-4b-instruct"
-    temperature: 0.0
-    max_tokens: 64
-  normalizer:
-    provider: nvidia
-    model: "nvidia/nemotron-mini-4b-instruct"
-    temperature: 0.0
-    max_tokens: 512
-    use_rag_priming: true
-    rag_top_k: 5
-  orchestrator:
-    provider: anthropic
-    model: claude-sonnet-4-6
-    temperature: 0.0
-    max_tokens: 1500
-    review_threshold: 0.75
-
-rag:
-  enabled: false             # opt-in
-  embedding_model: "nvidia/nv-embed-v1"
-  rerank_model: "nv-rerank-qa-mistral-4b:1"
-  store_path: "./cache/historical.db"
-```
-
-`hybrid` and `claude_only` modes ignore `agents:`/`providers:`/`rag:` blocks entirely. `multi_agent` mode ignores the legacy `models:` block. Backward compat is preserved because `AIClient.__init__` still reads `models`/`anthropic_api_key`/`cost_saver_mode` from their original positions.
-
-### 6. Orchestrator Review — End-of-Run Batched
-
-`ai/agents/orchestrator.py` exposes `review_rows(rows, threshold, ctx)`:
-
-1. Filter to `rows` where `not is_header_row and confidence < threshold`.
-2. Chunk to ~20 rows per request.
-3. For each chunk, send a JSON payload (`row_id`, `description`, `qty`, `units`, `sheet`, `method`, `confidence`) to Sonnet with a system prompt: "for each row, return one of {confirm, revise, reject} with a revised description if revising."
-4. Apply revisions in-place: bump `confidence` to 0.9, set `extraction_method = "reviewed"`, update `description` if revised.
-
-Hook fires from [core/assembler.py:325](core/assembler.py:325) `flush_batched_compose` after Phase-7 flush, before sort/validate. Cost: one Sonnet call per ~20 low-conf rows — typically a single-digit number of calls per PDF.
-
-### 7. RAG Store — SQLite + numpy Embeddings
-
-[core/rag_store.py](core/rag_store.py) (new):
+Concise — full Alembic migration generates these:
 
 ```sql
-CREATE TABLE historical_descriptions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    raw_input TEXT NOT NULL,
-    normalized TEXT NOT NULL,
-    sheet TEXT, keynote_ref TEXT,
-    project_name TEXT,
-    embedding BLOB NOT NULL,           -- np.float32 bytes
-    created_at TEXT DEFAULT (datetime('now')),
-    used_count INTEGER DEFAULT 0
+-- ``id`` matches Supabase Auth ``auth.users.id`` so RLS policies can use ``auth.uid()``.
+CREATE TABLE users (
+  id UUID PRIMARY KEY,                        -- = supabase auth.users.id (no FK to auth schema)
+  email TEXT,
+  extraction_mode TEXT NOT NULL DEFAULT 'multi_agent',
+  cost_saver_mode BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_hist_proj ON historical_descriptions(project_name);
+
+CREATE TABLE projects (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  deadline TIMESTAMPTZ,
+  markup_overhead FLOAT DEFAULT 10,
+  markup_profit FLOAT DEFAULT 8,
+  markup_contingency FLOAT DEFAULT 5,
+  exclusions TEXT[] DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX projects_user_idx ON projects(user_id);
+
+CREATE TABLE pdfs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  storage_key TEXT NOT NULL,
+  page_count INT,
+  byte_size BIGINT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX pdfs_project_idx ON pdfs(project_id);
+
+CREATE TABLE extractions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pdf_id UUID NOT NULL REFERENCES pdfs(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending',
+  extraction_mode TEXT NOT NULL,
+  cost_saver_mode BOOLEAN NOT NULL DEFAULT FALSE,
+  cost_usd FLOAT NOT NULL DEFAULT 0,
+  total_tokens INT NOT NULL DEFAULT 0,
+  api_calls INT NOT NULL DEFAULT 0,
+  error_message TEXT,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX extractions_user_status_idx ON extractions(user_id, status);
+
+CREATE TABLE qto_rows (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  extraction_id UUID NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+  position INT NOT NULL,                  -- ordering within sheet
+  s_no INT,
+  tag TEXT,
+  drawings TEXT,
+  details TEXT,
+  description TEXT,
+  qty FLOAT,
+  units TEXT,
+  unit_price FLOAT,
+  total_formula TEXT,
+  math_trail TEXT,
+  trade_division TEXT,
+  source_page INT,
+  source_sheet TEXT,
+  extraction_method TEXT,
+  confidence FLOAT,
+  bbox JSONB,
+  is_header_row BOOLEAN DEFAULT FALSE,
+  confirmed BOOLEAN DEFAULT FALSE,
+  needs_review BOOLEAN DEFAULT FALSE,
+  risk_flags TEXT[] DEFAULT '{}'
+);
+CREATE INDEX qto_rows_extraction_idx ON qto_rows(extraction_id);
+CREATE INDEX qto_rows_division_idx ON qto_rows(extraction_id, trade_division);
+
+CREATE TABLE token_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  extraction_id UUID NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  api_calls INT NOT NULL,
+  input_tokens INT NOT NULL,
+  output_tokens INT NOT NULL,
+  cache_read_tokens INT NOT NULL DEFAULT 0,
+  cache_write_tokens INT NOT NULL DEFAULT 0,
+  cost_usd FLOAT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX token_events_extraction_idx ON token_events(extraction_id);
 ```
 
-`HistoricalStore` exposes `add(raw, normalized, sheet, project, embedding)` and `search(query_embedding, top_k=20, project=None) -> list[(score, dict)]` doing in-Python cosine similarity. Avoid `sqlite-vec` (fragile macOS install); linear scan over <50k rows is sub-millisecond.
+---
 
-**Population is opt-in** — adding every extraction creates a feedback loop where bad rows poison future runs. Phase 1: CLI populator only. Phase 2 (separate ticket): "Save approved rows" button in `ui/results_table.py`.
+## API Surface (final)
 
-**Integration is priming, not validation.** Inside `description_normalizer.normalize`: if `ctx.rag_store and use_rag_priming`, embed the raw text → search top-20 → rerank with `nv-rerank-qa-mistral-4b:1` → keep top-K → inject as additional few-shot examples appended to the existing `_SYSTEM` prompt. All wrapped in `try/except ProviderCapabilityError: pass` so RAG failure doesn't fail extraction.
+All routes under `/api/*` are auth-required except `/api/health` and `/api/webhooks/clerk`.
 
-## Critical Files To Modify
+| Route | Method | Purpose |
+|---|---|---|
+| `/api/health` | GET | (existing) |
+| `/api/info` | GET | (existing — extend with `user.extraction_mode`) |
+| `/api/me` | GET | current user profile + prefs |
+| `/api/me/extraction-mode` | POST | set per-user mode preference |
+| `/api/me/cost-saver` | POST | toggle cost-saver mode |
+| `/api/projects` | GET, POST | list / create projects |
+| `/api/projects/{id}` | GET, PATCH, DELETE | per-project ops (name, deadline, markup defaults) |
+| `/api/projects/{id}/pdfs` | POST | multipart PDF upload, returns `{pdf_id, page_count}` |
+| `/api/projects/{id}/pdfs` | GET | list project PDFs |
+| `/api/pdfs/{id}` | DELETE | remove a PDF + its extractions |
+| `/api/extractions` | POST | start an extraction `{pdf_id, extraction_mode?}` |
+| `/api/extractions/{id}` | GET | extraction status + summary |
+| `/api/extractions/{id}/cancel` | POST | flip status to canceled |
+| `/api/extractions/{id}/rows` | GET | paginated rows (cursor-based) |
+| `/api/extractions/{id}/events` | GET (SSE) | live progress + token + row stream |
+| `/api/extractions/{id}/cost` | GET | aggregated token + cost breakdown by model |
+| `/api/extractions/{id}/coverage` | GET | division coverage + missing-sheet roster |
+| `/api/extractions/{id}/cockpit` | GET | division totals, sub-bid breakdown |
+| `/api/extractions/{id}/diff/{compare_id}` | GET | set-diff result vs another extraction |
+| `/api/rows/{id}` | PATCH | flip `confirmed` / `needs_review`, edit description |
+
+SSE event types on `/extractions/{id}/events`:
+- `progress` — `{page, total, page_type}`
+- `row_ready` — `{rows: [QTORow, ...]}`
+- `tokens` — full `TokenUsage` snapshot
+- `batch_status` — for cost-saver flush
+- `error` — `{message}`
+- `done` — `{cost_usd, total_rows}`
+- terminator: `data: [DONE]\n\n`
+
+---
+
+## Frontend Surface
+
+### New components (under `frontend/src/`)
+
+| Component | Path | Purpose |
+|---|---|---|
+| `auth/SignInGate.jsx` | shell | Wraps content with Supabase session check; renders `<Auth>` UI when signed-out |
+| `auth/supabaseClient.js` | shared | Single shared `createClient()` instance using `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` |
+| `panels/UploadDropzone.jsx` | takeoff | drag-drop + click upload, multipart POST, opt-out of "auto-start extraction" checkbox |
+| `panels/ProjectSwitcher.jsx` | topbar | replaces `Untitled Project ▾` static button — list of user's projects + new-project modal |
+| `components/ModePickerMenu.jsx` | topbar | port of PyQt6 `_ClickableModeBadge` — opens menu, calls `/api/me/extraction-mode` |
+| `panels/CostPopover.jsx` | settings (gear icon) | live cost from SSE stream, per-model breakdown, cost-saver toggle |
+| `workspaces/WhatChangedWorkspace.jsx` | tab #2 | port of `ui/workspaces/diff_workspace.py` |
+| `workspaces/CockpitWorkspace.jsx` | tab #3 | port of `ui/workspaces/cockpit_workspace.py` |
+| `workspaces/CoverageWorkspace.jsx` | tab #4 | port of `ui/workspaces/coverage_workspace.py` |
+| `hooks/useExtractionStream.js` | shared | EventSource wrapper, dispatches to react-query cache |
+| `hooks/useApi.js` | shared | wraps fetch with Clerk Bearer token + JSON envelope |
+| `stores/projectStore.js` | shared | zustand: active project + active extraction id |
+
+### Files to modify
 
 | File | Change |
 |---|---|
-| [requirements.txt](requirements.txt) | Add `httpx>=0.27` |
-| [config.yaml](config.yaml) | Append `providers:`, `agents:`, `rag:` blocks; extend `extraction_mode` enum |
-| [ai/providers/base.py](ai/providers/base.py) | NEW — Protocol + capability error |
-| [ai/providers/anthropic_provider.py](ai/providers/anthropic_provider.py) | NEW — wraps existing `_call`/`_vision_call` logic |
-| [ai/providers/nvidia_provider.py](ai/providers/nvidia_provider.py) | NEW — httpx client, OpenAI-compatible chat + embeddings + separate rerank URL |
-| [ai/agents/__init__.py](ai/agents/__init__.py) | NEW — `AgentContext` dataclass |
-| [ai/agents/page_classifier.py](ai/agents/page_classifier.py) | NEW |
-| [ai/agents/vision_extractor.py](ai/agents/vision_extractor.py) | NEW |
-| [ai/agents/text_extractor.py](ai/agents/text_extractor.py) | NEW |
-| [ai/agents/csi_classifier.py](ai/agents/csi_classifier.py) | NEW |
-| [ai/agents/description_normalizer.py](ai/agents/description_normalizer.py) | NEW — reuses `description_composer._SYSTEM` |
-| [ai/agents/rag.py](ai/agents/rag.py) | NEW |
-| [ai/agents/orchestrator.py](ai/agents/orchestrator.py) | NEW |
-| [ai/multi_agent_client.py](ai/multi_agent_client.py) | NEW — 14-method facade matching `AIClient` surface |
-| [ai/client.py](ai/client.py) | Add `review_low_confidence_rows` method (~30 lines) |
-| [core/rag_store.py](core/rag_store.py) | NEW — SQLite + numpy cosine search |
-| [core/assembler.py](core/assembler.py) | Append 3-line orchestrator hook in `flush_batched_compose` (line 325) |
-| [core/token_tracker.py](core/token_tracker.py) | Add NVIDIA model buckets to `_PRICING`, add `record_nvidia()` |
-| [ui/main_window.py](ui/main_window.py) | Branch on `extraction_mode` at line 88 to instantiate `MultiAgentClient` |
+| `frontend/src/App.jsx` | wrap with `<SignInGate>`, replace static topbar mode badge with `ModePickerMenu`, wire workspaces to real components, add CostPopover trigger to topbar |
+| `frontend/src/main.jsx` | construct shared Supabase client at boot |
+| `frontend/index.html` | (no change) |
+| `frontend/package.json` | add: `@supabase/supabase-js`, `@supabase/auth-ui-react`, `@supabase/auth-ui-shared`, `@tanstack/react-query`, `react-dropzone` |
 
-## Files To Reuse (No Modification)
+---
 
-- [ai/description_composer.py](ai/description_composer.py) `_SYSTEM` — model-portable, used verbatim by normalizer agent
-- [ai/batch_runner.py](ai/batch_runner.py) — Anthropic batch path stays for `hybrid`+cost-saver
-- [parser/pdf_splitter.py](parser/pdf_splitter.py) — heuristics remain as fast-path; new agent fires only on default fallback
-- [core/qto_row.py](core/qto_row.py) — `QTORow` already has `confidence`, `needs_review`, `extraction_method` fields
-- [core/validator.py](core/validator.py) — threshold enforcement is generic; already reads `confidence_review_threshold`
+## Backend File Layout
 
-## Commit Sequence (6 commits)
+```
+backend/
+  main.py                    (extend — wire routers, middleware)
+  config.py                  NEW — pydantic-settings env loader
+  db/
+    __init__.py
+    session.py               NEW — async engine + get_db dependency
+    models.py                NEW — SQLAlchemy 2.0 models matching schema
+    migrations/
+      env.py
+      versions/
+        0001_initial.py      NEW — full schema
+  middleware/
+    auth.py                  NEW — SupabaseAuthMiddleware (verifies JWT via JWKS, lazy-provisions User row)
+  services/
+    storage.py               NEW — Storage Protocol + SupabaseStorage (default) + LocalDiskStorage
+    jobs.py                  NEW — JobRunner with locks + queue
+    sse.py                   NEW — async event-stream helper
+    extraction_runner.py     NEW — adapted from ui/controllers/extraction_worker.py
+                                    (no Qt; emits to asyncio.Queue + Postgres rows)
+    coverage.py              NEW — division-coverage aggregation (matches ui/workspaces/coverage_workspace.py logic)
+    cockpit.py               NEW — division-totals + markup math (matches ui/workspaces/cockpit_workspace.py)
+    set_diff.py              NEW — wraps existing core/set_diff.py (already exists)
+  routes/
+    me.py                    NEW
+    projects.py              NEW
+    pdfs.py                  NEW
+    extractions.py           NEW
+    rows.py                  NEW
+    extraction_modes.py      NEW (the existing /api/extraction-modes goes here)
+    health.py                NEW (extracted)
+  requirements.txt           (extend — sqlalchemy, alembic, asyncpg, pyjwt[crypto], supabase, pydantic-settings)
+```
 
-1. **`feat(providers): Provider protocol + Anthropic/NVIDIA impls`** — providers package, `httpx` pin, `tests/test_providers.py`. No production wiring.
-2. **`feat(agents): function-based agents for the five extraction stages`** — agents package, `AgentContext`, `tests/test_agents.py`. No production wiring.
-3. **`feat(client): MultiAgentClient + orchestrator review hook`** — `multi_agent_client.py`, `orchestrator.py`, `review_low_confidence_rows` on `AIClient`, 3-line hook in `assembler.flush_batched_compose`, dispatch in `ui/main_window.py`, `tests/test_multi_agent_client.py`.
-4. **`feat(rag): historical store + priming integration`** — `core/rag_store.py`, `ai/agents/rag.py`, normalizer reads RAG when `use_rag_priming`. Default-off.
-5. **`feat(config): multi_agent mode + providers/agents/rag config blocks`** — additive `config.yaml` keys, integration test against `tests/fixtures/HBT_drawings.pdf` with mocked NVIDIA HTTP.
-6. **`feat(meter): NVIDIA token-tracker buckets + cost meter labels`** — extend `_PRICING`, add `record_nvidia`, update `ui/cost_meter.py`.
+---
 
-After commit 3 the new path is selectable in code; after commit 5 it's user-selectable via config. You can ship 1–3 first and decide whether to land 4–6 based on observed quality.
+## Existing Code to Reuse Without Modification
+
+| Module | Why |
+|---|---|
+| `core/assembler.py` | Process_page is the extraction core; extraction_runner calls it directly. |
+| `core/qto_row.py` | The wire format. Use `dataclasses.asdict()`. |
+| `core/token_tracker.py` | The on_update callback works as-is. Hook it to an asyncio.Queue. |
+| `core/cache.py` (ResultCache) | Use as a per-extraction memoization layer keyed by storage_key. Stays local to the worker. |
+| `core/set_diff.py` | Diff workspace API wraps this verbatim. |
+| `core/rag_store.py` | RAG queries unchanged; per-job connection. |
+| `ai/multi_agent_client.py` | Construct fresh per job. |
+| `ai/client.py` | Construct fresh per job. |
+| `parser/pdf_splitter.py:split_and_classify` | Unchanged. |
+| `parser/zone_segmenter.py` | Unchanged (used by Coverage workspace). |
+| `parser/callout_detector.py` | Unchanged (Phase 2 detail-bubble feature). |
+
+---
+
+## Existing Code to Reference for Logic Parity
+
+| New web file | PyQt6 source of truth |
+|---|---|
+| `services/cockpit.py` | `ui/workspaces/cockpit_workspace.py:117-379` — division subtotals, markup math (additive not compound) |
+| `services/coverage.py` | `ui/workspaces/coverage_workspace.py:83-240` — CSI division coverage, missing-sheet roster |
+| `services/set_diff.py` | `ui/workspaces/diff_workspace.py:45-340` — open_compare flow, $-impact column |
+| `services/extraction_runner.py` | `ui/controllers/extraction_worker.py:48-112` — drop the QThread shell, emit to asyncio.Queue |
+| `components/ModePickerMenu.jsx` | `ui/views/main_window.py:50-71, 765-839` — `_EXTRACTION_MODES` constant + `_open_mode_menu` / `_set_extraction_mode` |
+| `panels/UploadDropzone.jsx` | `ui/panels/upload_dialog.py` (legacy) — copy form-field labels |
+
+---
+
+## Commit Sequence (12 commits)
+
+| # | Commit | What |
+|---|---|---|
+| 1 | `feat(web): bootstrap Supabase project + Alembic + SQLAlchemy 2.0 + first migration` | DB + models. `supabase start` for local dev (Postgres + Auth + Storage). Alembic migration creates app tables. |
+| 2 | `feat(web): Supabase auth on FastAPI + React + protected /api/me` | SupabaseAuthMiddleware (JWKS verification), `<SignInGate>`, `/api/me` route. |
+| 3 | `feat(web): pluggable storage abstraction (SupabaseStorage default + LocalDisk fallback)` | `services/storage.py` + tests. RLS policy on the `qto-pdfs` bucket. |
+| 4 | `feat(web): projects + PDF upload routes + UploadDropzone UI` | `/api/projects`, `/api/projects/{id}/pdfs`. Upload UX in Takeoff. |
+| 5 | `feat(web): extraction job runner with per-user lock + SSE stream` | `services/jobs.py`, `services/extraction_runner.py`, `/api/extractions`, `/api/extractions/{id}/events`. Wire Run-Extraction button. |
+| 6 | `feat(web): rows API + virtualized DataTable port` | `/api/extractions/{id}/rows`, paginated React DataTable with status pills. |
+| 7 | `feat(web): mode picker menu in topbar + per-user persistence` | `ModePickerMenu`, `/api/me/extraction-mode`. |
+| 8 | `feat(web): What Changed workspace port` | `services/set_diff.py`, `/api/extractions/{id}/diff/{compare_id}`, `WhatChangedWorkspace.jsx`. |
+| 9 | `feat(web): Cockpit workspace port` | `services/cockpit.py`, `/api/extractions/{id}/cockpit`, `CockpitWorkspace.jsx` with markup sliders. |
+| 10 | `feat(web): Coverage workspace port` | `services/coverage.py`, `/api/extractions/{id}/coverage`, `CoverageWorkspace.jsx`. |
+| 11 | `feat(web): cost popover with live SSE stream + cost-saver toggle` | `CostPopover.jsx`, `/api/extractions/{id}/cost`. |
+| 12 | `feat(web): production deploy — Dockerfile + Fly.toml + single-port mount` | `Dockerfile` (multistage Node→Python), `fly.toml`, `scripts/start-qto.sh` (production), `alembic upgrade head` in entrypoint, README deploy section pointing at managed Supabase. |
+
+Each commit is independently mergeable, lands behind passing CI, and doesn't break the desktop app or PR #2's existing routes.
+
+### Parallel-agent dispatch plan (per the user's preference)
+
+For each commit above, the implementation phase will dispatch up to 3 sub-agents in parallel where the work is independent:
+
+| Commit | Agent A (backend) | Agent B (frontend) | Agent C (tests/docs) |
+|---|---|---|---|
+| 1 | Engineer — DB models + migration | — | Engineer — pytest fixtures + alembic test |
+| 2 | Engineer — auth middleware | Engineer — SignInGate + supabaseClient | — |
+| 3 | Engineer — storage Protocol + impls | — | Engineer — storage unit tests |
+| 4 | Engineer — projects + uploads routes | Engineer — UploadDropzone + ProjectSwitcher | — |
+| 5 | Engineer — extraction_runner + jobs | Engineer — useExtractionStream hook | — |
+| 6 | Engineer — rows API + pagination | Engineer — DataTable port | — |
+| 7 | Engineer — extraction_modes route | Engineer — ModePickerMenu | — |
+| 8 | Engineer — set_diff service | Engineer — WhatChangedWorkspace | — |
+| 9 | Engineer — cockpit service | Engineer — CockpitWorkspace | — |
+| 10 | Engineer — coverage service | Engineer — CoverageWorkspace | — |
+| 11 | Engineer — cost endpoint | Engineer — CostPopover | — |
+| 12 | Engineer — Dockerfile + fly.toml | — | Engineer — README + CI deploy step |
+
+Sequential dependencies that can NOT parallelise:
+- Commit 1 must land before any other (every agent imports the DB models).
+- Commit 2 must land before 4+ (every protected route uses the middleware).
+- Commit 3 must land before 4 (uploads need storage).
+- Commits 4 and 5 must land before 6–11 (everything reads `extractions` + `qto_rows`).
+
+---
 
 ## Verification
 
-**Unit (per commit):**
-- `tests/test_providers.py` — mock `httpx`, assert NVIDIA payload shape, assert reranker hits the *different* base URL, assert capability errors raise correctly.
-- `tests/test_agents.py` — fake `Provider` returning canned strings; assert each agent parses output correctly into typed result.
-- `tests/test_multi_agent_client.py` — instantiate with both providers mocked; call all 14 methods; assert routing matches config.
+### After every commit
+- `npm run dev` boots both servers; existing `/api/health` + `/api/info` still respond.
+- `pytest tests/` — the existing 312 tests still pass (none touch `backend/` or `frontend/`).
+- Frontend smoke: load http://localhost:5142, sign in via Supabase Auth UI, see backend health card with all four green pills.
 
-**Integration:**
-- `tests/test_multi_agent_integration.py` — runs `Assembler.process_page` against `tests/fixtures/HBT_drawings.pdf` with `extraction_mode: multi_agent` and a mocked NVIDIA HTTP layer. Assertions:
-  - Row count regression: `abs(len(rows_multi_agent) - len(rows_hybrid)) <= 0.10 * len(rows_hybrid)` — within ±10%.
-  - Confidence histogram: `sum(1 for r in rows if r.confidence >= 0.75) / len(rows) >= 0.60` — at least 60% above review threshold.
-  - **Do not** assert exact descriptions — different models will produce different exact text.
+### Per-feature checks
+1. **PDF upload + extraction (commits 4–6)**: drag a real Brooklyn fixture PDF onto the dropzone → see upload progress → row count grows live via SSE → Run Extraction completes with non-zero rows + cost.
+2. **Mode picker (commit 7)**: click MULTI_AGENT badge → menu drops down → pick HYBRID → page reloads → badge shows HYBRID → next extraction uses Claude-only path.
+3. **Workspaces (8–10)**: after one extraction completes, switch to Cockpit → markup sliders affect total live; Coverage → empty divisions visible; What Changed → upload a 2nd PDF, run, compare → diff workspace shows changed sheets.
+4. **Cost popover (11)**: gear icon opens popover → during extraction, total ticks up live → cost-saver toggle persists across reloads.
+5. **Deploy (12)**: `fly deploy` from a fresh checkout → app reachable at hosted URL → sign-in works → upload + extract works end-to-end.
 
-**Live smoke (manual, gated by env var):**
-- `pytest.mark.skipif(not os.environ.get("NVIDIA_API_KEY"), ...)` test that hits real NVIDIA `/chat/completions` with `nemotron-mini-4b` on a one-line input. Catches "URL/auth/model name moved" before users find it.
+### Production deploy gate
+- Health check on `/api/health` from Fly's healthcheck config.
+- Postgres migration runs at boot via `alembic upgrade head` in entrypoint (against the managed Supabase Postgres).
+- Storage backend env-driven: `STORAGE_BACKEND=supabase` (default) or `local` for self-hosted.
+- All secrets injected via `fly secrets set`: `ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `SUPABASE_DB_URL`.
 
-**Manual end-to-end:**
-1. Set `NVIDIA_API_KEY` in env.
-2. Set `extraction_mode: multi_agent` in `config.yaml`.
-3. Run `python main.py`, open `tests/fixtures/HBT_drawings.pdf`.
-4. Verify: cost meter shows NVIDIA token usage, low-confidence rows get reviewed, exported XLSX matches the GC template structure.
-5. Toggle back to `extraction_mode: hybrid`, re-run same PDF, confirm output is identical to pre-refactor (regression check).
+---
 
-## Open Question (Defer)
+## Risks & Mitigations
 
-**Orchestrator timing — per-page or end-of-run batched?** This plan picks **end-of-run** (reuses `flush_batched_compose` hook, costs one batch per PDF, zero churn to `process_page`). Per-page would give Claude fresher context but requires touching `process_page` and breaks the "smallest diff" goal. If row quality after end-of-run review is poor, revisit and add a per-page hook in `_make_row`.
+| Risk | Mitigation |
+|---|---|
+| **Pipeline is single-threaded** — `HistoricalStore`, `AIClient` caches collide under concurrent extractions. | Per-user `asyncio.Lock` + global `Semaphore(3)` in `services/jobs.py`. One `MultiAgentClient` per job. Document: `MAX_CONCURRENT_JOBS` is per-uvicorn-worker; multi-worker needs Redis pub/sub (out of v1 scope, flagged in commit 5 docstring). |
+| **PDF storage bloat** — 50MB drawing sets × N users × M projects | R2 in production (zero egress cost). Soft per-user quota (500MB) enforced at upload route. Manual cleanup endpoint in commit 4. |
+| **Supabase vendor lock** | All Supabase-specific code lives in `middleware/auth.py`, `services/storage.py::SupabaseStorage`, and `auth/SignInGate.jsx` + `auth/supabaseClient.js`. Swap-out is mechanical; swap-cost ≈ 2 days if needed (auth + storage are separate seams). The pluggable Storage Protocol means the LocalDisk backend keeps the app runnable without Supabase for self-hosters. |
+| **Long extraction → SSE timeout** | Fly's HTTP idle timeout is 60s by default. Use Fly's WebSocket-style sticky sessions OR keep SSE alive with a heartbeat event every 30s. Document in commit 5. |
+| **Migration drift between dev/prod** | Alembic migrations checked into the repo. CI runs `alembic upgrade head` on a temp Postgres before pytest. |
+| **Cost-meter SSE replay after disconnect** | `/api/extractions/{id}/cost` on the popover open call returns the full current snapshot from `token_events` aggregation; SSE only adds deltas. Survives disconnects. |
+| **PyQt6 desktop divergence** | Desktop and web use the same `core/`, `ai/`, `parser/` modules. Mode picker writes to `config.yaml` (desktop) vs `users.extraction_mode` (web) — different stores, no conflict. Documented in commit 7 docstring. |
+| **Cold-start cost of `MultiAgentClient` per job** | One-time `~30ms` init; fine for jobs that run for minutes. If it ever matters, add a per-worker LRU pool keyed by `(extraction_mode, user_id)`. |
+
+---
+
+## Out of Scope (Explicit Non-Goals)
+
+- **Background worker process** (Celery / RQ / Arq). v1 stays single-process; document the upgrade path.
+- **Real-time collaboration** — multiple users editing the same project. Each project is single-owner in v1.
+- **Excel export over the web** — desktop ships this; web port lands as a separate workstream once the read-only surface stabilises.
+- **Inline RAG ghost-text suggestions** — XL effort, deferred per the original `dapper-pebble` plan.
+- **Excel round-trip file watcher** — XL effort, deferred.
+- **Multi-region deploy** — single Fly region (iad) for v1.
+
+(Note: items previously listed here as out-of-scope have been **promoted into Phase 4** below — annotation toolkit + reports surface — after the user reviewed STACK CT screenshots and asked for the human-element tooling alongside the AI extraction.)
+
+---
+
+## Open Questions (Defer to Implementation)
+
+- **Supabase free-tier limits** — 50,000 MAU, 500 MB DB, 1 GB storage on free; Pro at $25/mo lifts to 100,000 MAU, 8 GB DB, 100 GB storage. v1 fits comfortably in free tier; growth path is well-defined.
+- **Bucket naming** — single `qto-pdfs` bucket with `{user_id}/{project_id}/{pdf_id}/source.pdf` key prefix + RLS keyed on the leading folder. Per-customer buckets only if a customer needs hard isolation (out of scope).
+- **Cancellation semantics** — `POST /api/extractions/{id}/cancel` flips DB status, but the running thread may not yield until next page boundary. Document as "cancellation takes effect at next page".
+- **Supabase RLS vs SQLAlchemy** — backend uses `SUPABASE_SERVICE_ROLE_KEY` (bypasses RLS) for performance; auth + scoping are enforced in our FastAPI middleware + WHERE-clauses, not via RLS. RLS only used on the storage bucket.
+
+---
+
+# Phase 4 — Human Annotation Toolkit + Reports (PR #3, after PR #2 merges)
+
+## Trigger
+
+User reviewed 6 STACK CT screenshots (project home + upload modal, plans grid, reports, sheet view with Edit menu, sheet view with Annotation menu, takeoff-quantity report) and asked us to **incorporate the human-element tooling alongside the AI extraction** for the Hybrid mode. Today the QTO pipeline is "AI extracts → table populates → done". STACK's value-add is the post-extraction *editor*: AI does first pass, estimator refines via 6 markup tools + 14 edit operations + 7 report types. PR #3 brings that surface to QTO with our own colours and icon set — we are NOT cloning STACK.
+
+## Decisions (from AskUserQuestion this turn)
+
+| Question | Decision |
+|---|---|
+| Color palette | **Midnight + violet (dark) / Warm cream + ink violet (light)** — escapes the STACK / Togal / Kreo emerald cliché entirely while keeping a calm, premium feel. |
+| Sequencing | **Finish PR #2 first, then PR #3.** PR #2 ships in emerald; PR #3 lands the visual pivot + the toolkit in one coherent "v2" experience. |
+| MVP tools | **All six STACK markup tools** (Highlight + Cloud + Callout + Dimension + Text Box + Legend) so the toolkit feels complete on first release rather than reading as a STACK feature gap. |
+
+## Color Palette Pivot — Midnight + Violet
+
+Both modes share token names; only hex values switch. Domain-semantic colours on table rows (yellow/pink/green/red/blue) are **unchanged** — they're orthogonal to brand.
+
+```
+                              DARK             LIGHT
+color.bg.canvas               #070914          #F8F5F0   warm cream
+color.bg.surface.1            #131829          #FFFFFF
+color.bg.surface.2            #1B2238          #FAF7F2
+color.bg.surface.3            #232C49          #F0EBE2
+color.bg.surface.raised       #2C375A          #FFFFFF (+shadow)
+color.border.subtle           rgba(148,163,184,.10)   #E7E5E4
+color.border.default          rgba(148,163,184,.18)   #D6D3D1
+color.border.strong           rgba(148,163,184,.28)   #A8A29E
+color.text.primary            #F1F5F9          #1C1917   warm near-black
+color.text.secondary          #94A3B8          #57534E
+color.text.tertiary           #7B8BA8          #78716C
+color.text.quaternary         #475569          #A8A29E
+
+# Brand — single accent, violet (replacing emerald)
+color.accent.default          #7C3AED          #5B21B6   deeper on cream
+color.accent.hover            #6D28D9          #4C1D95
+color.accent.pressed          #5B21B6          #3B0764
+color.accent.subtle           rgba(124,58,237,.16)    #EDE9FE
+color.accent.glow             rgba(124,58,237,.30)    rgba(91,33,182,.20)
+color.accent.on               #FFFFFF          #FFFFFF
+
+# Secondary — coral (replacing amber for Ask-AI / soft warnings)
+color.coral.default           #FB923C          #C2410C   terracotta
+color.coral.hover             #F97316          #9A3412
+color.coral.subtle            rgba(251,146,60,.15)    #FEE4D6
+color.coral.glow              rgba(251,146,60,.30)    rgba(194,65,12,.20)
+
+# UI states — restrained
+color.success                 #34D399          #15803D   approved-green (rows only)
+color.warning                 #FB923C          #C2410C   = coral (alias)
+color.danger                  #F87171          #B91C1C
+color.info                    #94A3B8          #57534E   slate
+
+# Domain semantics — UNCHANGED from Phase 1
+color.confirmed-yellow        #FDE047          #FACC15
+color.revision-pink           #F472B6          #DB2777
+color.demo-red                #F87171          #B91C1C
+color.approved-green          #34D399          #15803D
+color.mep-blue                #38BDF8          #0284C7
+```
+
+**Tri-color rule (unchanged in spirit, swapped in colour):** brand violet drives interactive chrome (buttons, focus rings, links, active nav). Coral drives transient AI-in-progress states + the Ask-AI button. Domain semantics drive *data state* on rows. The three palettes never cross.
+
+## Annotation Toolkit Surface (mirrors STACK images 4–5, redesigned)
+
+### 6 markup tools (Annotation menu)
+1. **Highlight** — colored rectangle / freeform polygon. Most-used tool.
+2. **Cloud** — revision-cloud markup. For RFIs and post-bid changes.
+3. **Callout** — text label with leader line; can link to a takeoff row.
+4. **Dimension** — auto-calculated line length using the calibrated scale (PyQt6 commit 11 already shipped Set-Scale; we reuse).
+5. **Text Box** — free annotation overlay.
+6. **Legend** — categorical mapping table embedded on a sheet.
+
+### 14 edit operations (Edit menu)
+Single Select · Multiselect · Select All · Undo · Cut · Copy · Paste · Merge · **Change Takeoff** · Explode · Rotate · Flip Horizontal · Flip Vertical · Cut Line · Delete
+
+The **Change Takeoff** op is the killer feature for Hybrid mode: select an annotated region → reassign it to a different takeoff row → no re-extraction needed. Closes the "AI got the category wrong" loop instantly.
+
+### 7 report types (Reports tab)
+Takeoff Quantity · Takeoff Summary · Measurements By Takeoff · Item List · Item Cost · Item Cost By Type · Item Cost By Takeoff
++ Snapshots (save report state, compare later) + Columns/Groupings/Filters/Reset + Print/Export (CSV/Excel/PDF).
+
+## Persistence — `annotations` table
+
+```sql
+CREATE TABLE annotations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pdf_id UUID NOT NULL REFERENCES pdfs(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sheet_number TEXT NOT NULL,
+  page_num INT NOT NULL,
+  type TEXT NOT NULL,                     -- highlight | cloud | callout | dimension | text_box | legend
+  geometry JSONB NOT NULL,                -- shape-specific: {bbox} for highlight, {points} for polygon, {start, end} for dimension, etc
+  color TEXT NOT NULL DEFAULT '#FDE047',  -- domain-semantic; defaults to confirmed-yellow
+  label TEXT,                             -- for callout / text-box / legend
+  takeoff_row_id UUID REFERENCES qto_rows(id) ON DELETE SET NULL,  -- nullable; set by Change-Takeoff op
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX annotations_pdf_sheet_idx ON annotations(pdf_id, sheet_number);
+CREATE INDEX annotations_takeoff_idx ON annotations(takeoff_row_id) WHERE takeoff_row_id IS NOT NULL;
+```
+
+## Implementation — desktop vs web parity
+
+| Concept | Desktop (PyQt6) | Web (React + PDF.js) |
+|---|---|---|
+| Canvas overlay | `QGraphicsScene` over `pdf_canvas.py` (already exists for trace-back). Add `AnnotationLayer` subclass. | SVG layer over `react-pdf` page. One `<g>` per annotation; absolute positioning in PDF coordinate space. |
+| Hit testing | `QGraphicsItem` natively. | Native SVG event delegation. |
+| Tool state | `QStateMachine` per tool. | `zustand` store: `{ activeTool: 'highlight'|null, selection: Set<id>, draftAnnotation: ... }`. |
+| Geometry editing | `QGraphicsItem` flags + `itemChange()`. | Resize handles as 8 SVG circles per selected annotation. |
+| Persistence | Calls `annotations` REST through the same `apiFetch` we already wired (commit 2). | Same. Single source of truth. |
+
+## Commit Sequence (10 commits → PR #3)
+
+| # | Commit | What |
+|---|---|---|
+| 13 | `feat(theme): pivot to midnight+violet (dark) + warm cream+ink-violet (light)` | Update tokens in `frontend/src/index.css` and `ui/theme/tokens.py`. Audit for hardcoded brand hexes. Update mode-badge / SignInGate / Ask-AI button colours. Side-by-side screenshots in PR description. |
+| 14 | `feat(annot): annotations table + REST API` | Alembic migration for the schema above. `POST/GET/PATCH/DELETE /api/projects/{id}/annotations` + `/api/annotations/{id}`. Tests for CRUD + auth scoping. |
+| 15 | `feat(annot): canvas overlay layer (web SVG + desktop QGraphics)` | `frontend/src/canvas/AnnotationLayer.jsx` + `ui/views/annotation_layer.py`. Selection model, marquee drag, keyboard shortcuts (Esc / Del / arrows / Cmd+A). |
+| 16 | `feat(annot): Highlight + Text Box tools` | Simplest two — bbox geometry, text overlay. Toolbar pivot keys (Shift+H, Shift+T). |
+| 17 | `feat(annot): Dimension + Set-Scale wiring` | Reuse existing `CalibrationDialog`. Auto-calculated length displayed inline. |
+| 18 | `feat(annot): Cloud + Callout tools` | Cloud's wavy-edge geometry, callout's leader line + linked-takeoff-row picker. |
+| 19 | `feat(annot): Legend tool + Edit menu (Cut/Copy/Paste/Merge/Explode/Rotate/Flip/Cut Line/Delete)` | Legend = categorical mapping widget. Edit-menu ops act on the selection set. |
+| 20 | `feat(annot): Change Takeoff op` | Right-click → "Change Takeoff…" → modal picker over `qto_rows`. The Hybrid-mode killer feature, called out in commit message + PR description. |
+| 21 | `feat(reports): 7 report types + groupings / filters / snapshots` | Reports tab in topbar. Snapshots persist to a new `report_snapshots` table. |
+| 22 | `feat(reports): print preview + CSV / Excel / PDF export` | Excel via `openpyxl`, PDF via headless Chromium / WeasyPrint. CSV inline. |
+
+Each commit lands behind passing CI; PR #3 is independently reviewable from PR #2.
+
+## What changes in PR #2 because of this addendum
+
+**Nothing.** PR #2 stays on emerald; the colour pivot + toolkit are PR #3's job. Commits 4–12 of PR #2 proceed as already planned.
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| **6 tools + 14 edit ops + 7 reports is a lot** for a single PR (10 commits ≈ 2–3 weeks). | Strict commit boundaries (one tool per commit). Each commit lands shippable; review can pause between tools without blocking. |
+| **Color pivot might feel disorienting** to anyone using the emerald build today. | Side-by-side screenshots in PR #3 description. Theme-toggle still works; users can stay on dark / light per preference. The pivot is brand colours only — domain-semantic table colours are UNCHANGED, so reading takeoffs still feels familiar. |
+| **PDF.js + SVG overlay performance** on 50-page sheets with 500 annotations. | Virtualise: render only the active sheet's annotation layer; lazy-load on page change. Use `transform` for pan/zoom (GPU-accelerated). Benchmarked target: 60fps on a 200-annotation sheet. |
+| **Change-Takeoff cascade** — reassigning an annotation to a different takeoff row needs to update aggregates (cockpit totals, coverage, reports) in real time. | The takeoff-row write fires a Postgres `LISTEN/NOTIFY` event the SSE channel pipes to all connected clients. Tested against a synthetic 100-row reassign in CI. |
+| **Annotation conflicts** if the same user opens two browser tabs and edits the same PDF. | `updated_at` optimistic locking — PATCH passes `If-Unmodified-Since`; server 409s on conflict; client refreshes. Documented as known limitation in commit 14. |
