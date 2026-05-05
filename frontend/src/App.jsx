@@ -16,6 +16,7 @@ import {
   CircleDot,
 } from 'lucide-react'
 import SignInGate from './auth/SignInGate.jsx'
+import DataTable from './components/DataTable.jsx'
 import { useApi } from './hooks/useApi.js'
 import { useExtractionStream } from './hooks/useExtractionStream.js'
 import ProjectSwitcher from './panels/ProjectSwitcher.jsx'
@@ -260,6 +261,8 @@ function TakeoffWorkspace({ info }) {
       <UploadDropzone />
 
       <ExtractionStatusBanner />
+
+      <DataTable extractionId={useProjectStore((s) => s.extraction.extractionId)} />
 
       {pdfs.length > 0 && (
         <section className="pdf-list">
