@@ -1748,3 +1748,14 @@
   transform: translateX(14px);
   background: #FFFFFF;
 }
+
+/* ── Annotation layer ─────────────────────────────────────────────── */
+
+.annotation-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  /* Don't intercept clicks on the empty SVG canvas itself unless the
+   * caller has positioned us over a real PDF page; the per-shape
+   * onClick handlers re-enable interaction on shape elements. */
+}
