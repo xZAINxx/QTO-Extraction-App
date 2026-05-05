@@ -1,23 +1,36 @@
 /* ──────────────────────────────────────────────────────────────────
- * Design tokens — calibrated to feel like a sibling of the Zeconic
- * CPM Checker (deep navy canvas, amber CTAs, JetBrains Mono numerics)
- * but with the QTO-native emerald accent reserved for the primary
- * "Run Extraction" action.
+ * Design tokens — Phase 4 pivot.
  *
- * Tri-color rule (mirrors the PyQt6 design tokens):
- *   - Brand emerald  → primary CTA / interactive chrome
- *   - Amber          → "Ask AI" / soft-warning surfaces
- *   - Domain semantics (yellow-confirm / pink-revision / red-demo)
- *     stay on rows; never bleed into chrome.
+ * Brand pivots from emerald → violet (escapes the STACK / Togal /
+ * Kreo green cliché). Coral replaces amber for "Ask AI" / soft
+ * warnings. Domain-semantic table colours (yellow-confirmed,
+ * pink-revision, green-approved, red-demo, blue-mep) are UNCHANGED
+ * so reading takeoffs still feels familiar.
+ *
+ * Light mode complements the dark with warm cream + ink violet —
+ * editorial / architectural feel, like an architect's stationery.
+ *
+ * Tri-color rule (unchanged in spirit, swapped in colour):
+ *   - Violet  → primary CTA / interactive chrome
+ *   - Coral   → AI-in-progress + soft warnings
+ *   - Domain semantics (yellow / pink / red / green / blue) drive
+ *     row-level data state. The three palettes never cross.
+ *
+ * The legacy emerald / amber tokens are KEPT as aliases pointing at
+ * the new violet / coral so existing CSS that references them
+ * (mode-badge, sidenav active state, status pills) doesn't need a
+ * blanket rewrite. Anywhere the old name reads "emerald" semantically
+ * meaning "primary CTA" the new value gives violet behaviour
+ * automatically.
  * ────────────────────────────────────────────────────────────────── */
 
 :root {
-  /* Canvas + surfaces */
-  --canvas:        #060816;
-  --surface-1:     #0D1326;
-  --surface-2:     #111A31;
-  --surface-3:     #17213E;
-  --surface-4:     #1E2A4C;
+  /* ── Canvas + surfaces — DARK (default) ────────────────────────── */
+  --canvas:        #070914;
+  --surface-1:     #131829;
+  --surface-2:     #1B2238;
+  --surface-3:     #232C49;
+  --surface-4:     #2C375A;
 
   --glass:         rgba(148, 163, 184, 0.08);
   --glass-border:  rgba(148, 163, 184, 0.12);
@@ -28,24 +41,39 @@
   --border-default: rgba(148, 163, 184, 0.18);
   --border-strong:  rgba(148, 163, 184, 0.28);
 
-  /* Brand & accents */
-  --emerald:       #16A34A;
-  --emerald-hover: #15803D;
-  --emerald-dim:   rgba(22, 163, 74, 0.16);
-  --emerald-glow:  rgba(22, 163, 74, 0.30);
+  /* ── Brand — Violet (replaces emerald as the primary CTA tone) ── */
+  --violet:        #7C3AED;
+  --violet-hover:  #6D28D9;
+  --violet-pressed:#5B21B6;
+  --violet-dim:    rgba(124, 58, 237, 0.16);
+  --violet-glow:   rgba(124, 58, 237, 0.30);
 
-  --amber:         #F59E0B;
-  --amber-dim:     rgba(245, 158, 11, 0.15);
-  --amber-glow:    rgba(245, 158, 11, 0.30);
+  /* Coral replaces amber for "Ask AI" + soft warnings. */
+  --coral:         #FB923C;
+  --coral-hover:   #F97316;
+  --coral-dim:     rgba(251, 146, 60, 0.15);
+  --coral-glow:    rgba(251, 146, 60, 0.30);
 
-  --indigo:        #3B82F6;
-  --indigo-dim:    rgba(59, 130, 246, 0.16);
+  /* Legacy aliases — every CSS reference to --emerald-* / --amber-*
+     resolves to violet / coral now without touching the rest of the
+     stylesheet. Keeps the diff minimal in this commit. */
+  --emerald:       var(--violet);
+  --emerald-hover: var(--violet-hover);
+  --emerald-dim:   var(--violet-dim);
+  --emerald-glow:  var(--violet-glow);
 
-  --red:           #EF4444;
-  --red-dim:       rgba(239, 68, 68, 0.15);
+  --amber:         var(--coral);
+  --amber-dim:     var(--coral-dim);
+  --amber-glow:    var(--coral-glow);
 
-  --purple:        #8B5CF6;
-  --purple-dim:    rgba(139, 92, 246, 0.15);
+  --indigo:        #38BDF8;
+  --indigo-dim:    rgba(56, 189, 248, 0.16);
+
+  --red:           #F87171;
+  --red-dim:       rgba(248, 113, 113, 0.15);
+
+  --purple:        #A78BFA;
+  --purple-dim:    rgba(167, 139, 250, 0.15);
 
   /* Text */
   --text-1:        #F1F5F9;
@@ -53,17 +81,17 @@
   --text-3:        #7B8BA8;
   --text-4:        #475569;
 
-  /* Domain semantics — for table rows only, never chrome */
+  /* Domain semantics — UNCHANGED across the pivot. Row-data only. */
   --confirmed-yellow: #FACC15;
   --revision-pink:    #EC4899;
-  --approved-green:   #16A34A;
-  --demo-red:         #DC2626;
-  --mep-blue:         #0EA5E9;
+  --approved-green:   #34D399;
+  --demo-red:         #F87171;
+  --mep-blue:         #38BDF8;
 
   /* Shadows */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.20);
-  --shadow-2: 0 4px 8px rgba(0, 0, 0, 0.30);
-  --shadow-3: 0 12px 24px rgba(0, 0, 0, 0.40);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-2: 0 4px 8px rgba(0, 0, 0, 0.36);
+  --shadow-3: 0 12px 24px rgba(0, 0, 0, 0.46);
 
   /* Radii */
   --r-sm:  4px;
@@ -78,6 +106,63 @@
   --topbar-h:    56px;
   --nav-rail-w:  220px;
   --status-h:    36px;
+}
+
+/* ── LIGHT mode — warm cream + ink violet ────────────────────────────
+ * Triggered via `data-theme="light"` on <html> or <body>. The default
+ * (no attribute) stays DARK. The theme-toggle hook in App.jsx will
+ * write this attribute when we wire it; for now the stylesheet is
+ * ready and the SignInGate's theme="dark" prop in @supabase/auth-ui
+ * gracefully ignores it. */
+[data-theme="light"] {
+  --canvas:        #F8F5F0;
+  --surface-1:     #FFFFFF;
+  --surface-2:     #FAF7F2;
+  --surface-3:     #F0EBE2;
+  --surface-4:     #E7E1D6;
+
+  --glass:         rgba(120, 113, 108, 0.08);
+  --glass-border:  rgba(120, 113, 108, 0.12);
+  --glass-hover:   rgba(120, 113, 108, 0.14);
+
+  --border-subtle:  #EFEBE2;
+  --border-default: #D6D3D1;
+  --border-strong:  #A8A29E;
+
+  --violet:        #5B21B6;
+  --violet-hover:  #4C1D95;
+  --violet-pressed:#3B0764;
+  --violet-dim:    rgba(91, 33, 182, 0.10);
+  --violet-glow:   rgba(91, 33, 182, 0.20);
+
+  --coral:         #C2410C;
+  --coral-hover:   #9A3412;
+  --coral-dim:     rgba(194, 65, 12, 0.10);
+  --coral-glow:    rgba(194, 65, 12, 0.20);
+
+  --indigo:        #2563EB;
+  --indigo-dim:    rgba(37, 99, 235, 0.10);
+
+  --red:           #B91C1C;
+  --red-dim:       rgba(185, 28, 28, 0.10);
+
+  --purple:        #7C3AED;
+  --purple-dim:    rgba(124, 58, 237, 0.10);
+
+  --text-1:        #1C1917;
+  --text-2:        #57534E;
+  --text-3:        #78716C;
+  --text-4:        #A8A29E;
+
+  --confirmed-yellow: #FACC15;
+  --revision-pink:    #DB2777;
+  --approved-green:   #15803D;
+  --demo-red:         #B91C1C;
+  --mep-blue:         #0284C7;
+
+  --shadow-1: 0 1px 2px rgba(28, 25, 23, 0.06);
+  --shadow-2: 0 4px 8px rgba(28, 25, 23, 0.10);
+  --shadow-3: 0 12px 24px rgba(28, 25, 23, 0.14);
 }
 
 * {
@@ -107,11 +192,10 @@ button {
 }
 
 ::selection {
-  background: var(--emerald-dim);
+  background: var(--violet-dim);
   color: var(--text-1);
 }
 
-/* Scrollbars — muted, not chrome-default */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
