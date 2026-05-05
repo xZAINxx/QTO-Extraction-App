@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ChevronRight,
   Command,
@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 import SignInGate from './auth/SignInGate.jsx'
 import DataTable from './components/DataTable.jsx'
-import { useApi } from './hooks/useApi.js'
+import { apiFetch, useApi } from './hooks/useApi.js'
 import { useExtractionStream } from './hooks/useExtractionStream.js'
 import ProjectSwitcher from './panels/ProjectSwitcher.jsx'
 import UploadDropzone from './panels/UploadDropzone.jsx'
@@ -68,6 +68,17 @@ export default function App() {
       cancelled = true
     }
   }, [apiFetch])
+
+  // Listen for the ModeBadge's "I just changed the mode" event so the
+  // displayed badge text + the extraction-mode in the takeoff subtitle
+  // both refresh without a full page reload.
+  useEffect(() => {
+    function onInfoUpdated(e) {
+      if (e?.detail) setInfo(e.detail)
+    }
+    window.addEventListener('qto:info-updated', onInfoUpdated)
+    return () => window.removeEventListener('qto:info-updated', onInfoUpdated)
+  }, [])
 
   return (
     <SignInGate>
@@ -137,13 +148,107 @@ function Topbar({ info }) {
   )
 }
 
+const _EXTRACTION_MODES = [
+  {
+    key: 'hybrid',
+    label: 'Hybrid (Claude)',
+    description:
+      'Claude routes everything. Most accurate; highest token spend.',
+  },
+  {
+    key: 'multi_agent',
+    label: 'Multi-Agent (NVIDIA + Claude)',
+    description:
+      'NVIDIA NIM agents extract; Claude reviews low-confidence rows.',
+  },
+  {
+    key: 'claude_only',
+    label: 'Claude Only (legacy)',
+    description: 'Pure Claude pipeline; bisect tool only.',
+  },
+]
+
+
 function ModeBadge({ mode }) {
-  const display = (mode ?? '').replace('_', ' ').toUpperCase() || '—'
+  const [open, setOpen] = useState(false)
+  const [pending, setPending] = useState(null)
+  const setExtractionMode = useProjectStore.getState
+  const ref = useRef(null)
+  const display = ((pending ?? mode) ?? '').replace('_', ' ').toUpperCase() || '—'
+
+  useEffect(() => {
+    if (!open) return undefined
+    function onClick(e) {
+      if (ref.current?.contains(e.target)) return
+      setOpen(false)
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const onPick = async (newMode) => {
+    setOpen(false)
+    setPending(newMode)
+    try {
+      await apiFetch('/api/me/extraction-mode', {
+        method: 'POST',
+        body: { extraction_mode: newMode },
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('mode update failed', err)
+    } finally {
+      setPending(null)
+      // Refetch /api/info so the parent App's `info.extraction_mode`
+      // reflects the new value (we read from there elsewhere).
+      try {
+        const data = await apiFetch('/api/info')
+        // best-effort propagate via a custom event the parent can hear
+        window.dispatchEvent(new CustomEvent('qto:info-updated', { detail: data }))
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   return (
-    <button className="mode-badge" type="button" title="Extraction mode">
-      <CircleDot size={10} className="mode-badge__dot" />
-      <span>{display}</span>
-    </button>
+    <div className="mode-badge-wrap" ref={ref}>
+      <button
+        className="mode-badge mode-badge--clickable"
+        type="button"
+        title="Click to switch extraction mode"
+        onClick={() => setOpen((p) => !p)}
+      >
+        <CircleDot size={10} className="mode-badge__dot" />
+        <span>{display}</span>
+      </button>
+      {open && (
+        <div className="mode-badge__menu" role="menu">
+          {_EXTRACTION_MODES.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              role="menuitem"
+              className={
+                'mode-badge__item' +
+                (m.key === mode ? ' mode-badge__item--active' : '')
+              }
+              onClick={() => onPick(m.key)}
+            >
+              <div className="mode-badge__item-label">{m.label}</div>
+              <div className="mode-badge__item-desc">{m.description}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

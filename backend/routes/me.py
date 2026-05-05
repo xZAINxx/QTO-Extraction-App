@@ -10,13 +10,17 @@ of the application-side ``users`` row — happens in the
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db import User
+from backend.db import User, get_db
 from backend.middleware.auth import current_user
+
+
+_VALID_MODES = ("hybrid", "multi_agent", "claude_only")
 
 
 router = APIRouter(prefix="/api/me", tags=["me"])
@@ -52,6 +56,57 @@ async def get_me(user: Annotated[User, Depends(current_user)]) -> MeResponse:
         extraction_mode=user.extraction_mode,
         cost_saver_mode=user.cost_saver_mode,
         created_at=created_at.isoformat(),
+    )
+
+
+class ExtractionModePayload(BaseModel):
+    extraction_mode: Literal["hybrid", "multi_agent", "claude_only"]
+
+
+class CostSaverPayload(BaseModel):
+    cost_saver_mode: bool
+
+
+@router.post("/extraction-mode", response_model=MeResponse)
+async def set_extraction_mode(
+    payload: ExtractionModePayload,
+    user: Annotated[User, Depends(current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> MeResponse:
+    """Update the per-user extraction-mode preference.
+
+    The new mode applies to the NEXT extraction (already-running jobs
+    keep the mode they were started with — extractions snapshot
+    ``extraction_mode`` at start time).
+    """
+    user.extraction_mode = payload.extraction_mode
+    await db.commit()
+    await db.refresh(user)
+    return MeResponse(
+        id=str(user.id),
+        email=user.email,
+        extraction_mode=user.extraction_mode,
+        cost_saver_mode=user.cost_saver_mode,
+        created_at=user.created_at.isoformat(),
+    )
+
+
+@router.post("/cost-saver", response_model=MeResponse)
+async def set_cost_saver(
+    payload: CostSaverPayload,
+    user: Annotated[User, Depends(current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> MeResponse:
+    """Toggle the cost-saver flag (Phase 7 batch routing for compose calls)."""
+    user.cost_saver_mode = payload.cost_saver_mode
+    await db.commit()
+    await db.refresh(user)
+    return MeResponse(
+        id=str(user.id),
+        email=user.email,
+        extraction_mode=user.extraction_mode,
+        cost_saver_mode=user.cost_saver_mode,
+        created_at=user.created_at.isoformat(),
     )
 
 
