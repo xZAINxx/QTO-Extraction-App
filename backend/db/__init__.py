@@ -14,6 +14,7 @@ Alembic drives them via ``alembic upgrade head`` in the entrypoint.
 from __future__ import annotations
 
 from .models import (
+    Annotation,
     Base,
     Extraction,
     Pdf,
@@ -30,6 +31,7 @@ from .session import (
 )
 
 __all__ = [
+    "Annotation",
     "Base",
     "Extraction",
     "Pdf",

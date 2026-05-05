@@ -49,6 +49,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from backend.db import dispose_engine, init_engine  # noqa: E402
 from backend.middleware.auth import SupabaseAuthMiddleware  # noqa: E402
+from backend.routes.annotations import router as annotations_router  # noqa: E402
 from backend.routes.extractions import router as extractions_router  # noqa: E402
 from backend.routes.me import router as me_router  # noqa: E402
 from backend.routes.pdfs import router as pdfs_router  # noqa: E402
@@ -212,6 +213,7 @@ app.include_router(pdfs_router)
 app.include_router(extractions_router)
 app.include_router(rows_router)
 app.include_router(workspaces_router)
+app.include_router(annotations_router)
 
 
 # ── SPA fallthrough (production single-port mode) ──────────────────────

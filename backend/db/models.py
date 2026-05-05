@@ -376,7 +376,65 @@ class TokenEvent(Base):
         return f"<TokenEvent ext={self.extraction_id} model={self.model}>"
 
 
+class Annotation(Base):
+    """Manual markup applied to a PDF page (Phase 4).
+
+    One row per markup primitive (highlight rectangle, dimension line,
+    callout, etc). ``geometry`` is JSONB because the shape varies per
+    ``type`` — bbox for highlights, ``{points}`` for clouds,
+    ``{start, end}`` for dimensions, etc. The frontend canvas owns the
+    rendering; the backend just stores + serves.
+
+    ``takeoff_row_id`` is nullable: an annotation can stand alone OR
+    be linked to a QtoRow for the Change-Takeoff op.
+    """
+
+    __tablename__ = "annotations"
+
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    pdf_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("pdfs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sheet_number: Mapped[str] = mapped_column(String, nullable=False)
+    page_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    type: Mapped[str] = mapped_column(String, nullable=False)
+    geometry: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    color: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="#FDE047"
+    )
+    label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    takeoff_row_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("qto_rows.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Annotation id={self.id} type={self.type} pdf={self.pdf_id}>"
+
+
 __all__ = [
+    "Annotation",
     "Base",
     "User",
     "Project",
