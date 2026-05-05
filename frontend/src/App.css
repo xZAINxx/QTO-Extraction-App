@@ -1361,3 +1361,197 @@
   font-size: 12px;
   color: var(--text-3);
 }
+
+/* ── Cockpit total card ───────────────────────────────────────────── */
+
+.cockpit-total-card {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.cockpit-total-card__total {
+  font-family: var(--font-mono);
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
+  line-height: 1.1;
+}
+
+.cockpit-total-card__markup {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.cockpit-total-card__deadline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cockpit-total-card__deadline--info {
+  background: var(--indigo-dim);
+  color: #93C5FD;
+  border: 1px solid rgba(59, 130, 246, 0.30);
+}
+
+.cockpit-total-card__deadline--warning {
+  background: var(--amber-dim);
+  color: #FCD34D;
+  border: 1px solid rgba(245, 158, 11, 0.30);
+}
+
+.cockpit-total-card__deadline--danger {
+  background: var(--red-dim);
+  color: #FCA5A5;
+  border: 1px solid rgba(239, 68, 68, 0.30);
+}
+
+/* ── Markup sliders ──────────────────────────────────────────────── */
+
+.markup-controls {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.markup-control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 16px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+.markup-control__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.markup-control__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.markup-control__value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.markup-control__dollar {
+  color: var(--text-3);
+}
+
+.markup-control__slider {
+  width: 100%;
+  accent-color: var(--emerald);
+}
+
+.cockpit-divisions {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+/* ── Coverage ────────────────────────────────────────────────────── */
+
+.coverage-empty {
+  border-radius: var(--r-md);
+  border: 1px solid rgba(239, 68, 68, 0.30);
+  background: rgba(239, 68, 68, 0.05);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.coverage-empty__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #FCA5A5;
+}
+
+.coverage-empty__body {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.coverage-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.coverage-chip {
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-default);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+.coverage-chip--empty {
+  background: var(--red-dim);
+  border-color: rgba(239, 68, 68, 0.32);
+  color: #FCA5A5;
+}
+
+/* ── Diff workspace ─────────────────────────────────────────────── */
+
+.diff-summary {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diff-summary__heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.diff-summary__line {
+  font-size: 14px;
+  color: var(--text-1);
+  margin: 0;
+}
+
+.diff-summary__note {
+  font-size: 12px;
+  color: var(--text-3);
+  margin: 0;
+}

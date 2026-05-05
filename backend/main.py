@@ -54,6 +54,7 @@ from backend.routes.me import router as me_router  # noqa: E402
 from backend.routes.pdfs import router as pdfs_router  # noqa: E402
 from backend.routes.projects import router as projects_router  # noqa: E402
 from backend.routes.rows import router as rows_router  # noqa: E402
+from backend.routes.workspaces import router as workspaces_router  # noqa: E402
 
 
 APP_ENV = os.environ.get("APP_ENV", "production").lower()
@@ -210,6 +211,7 @@ app.include_router(projects_router)
 app.include_router(pdfs_router)
 app.include_router(extractions_router)
 app.include_router(rows_router)
+app.include_router(workspaces_router)
 
 
 # ── SPA fallthrough (production single-port mode) ──────────────────────

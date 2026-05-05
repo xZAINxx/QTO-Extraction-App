@@ -22,6 +22,9 @@ import { useExtractionStream } from './hooks/useExtractionStream.js'
 import ProjectSwitcher from './panels/ProjectSwitcher.jsx'
 import UploadDropzone from './panels/UploadDropzone.jsx'
 import useProjectStore from './stores/projectStore.js'
+import CockpitWorkspace from './workspaces/CockpitWorkspace.jsx'
+import CoverageWorkspace from './workspaces/CoverageWorkspace.jsx'
+import WhatChangedWorkspace from './workspaces/WhatChangedWorkspace.jsx'
 import './App.css'
 
 /**
@@ -333,6 +336,9 @@ function SideNav({ activeWorkspace, onSelect }) {
 function WorkspaceContent({ workspace, info, error }) {
   if (error) return <ErrorState message={error} />
   if (workspace === 'takeoff') return <TakeoffWorkspace info={info} />
+  if (workspace === 'diff') return <WhatChangedWorkspace />
+  if (workspace === 'cockpit') return <CockpitWorkspace />
+  if (workspace === 'coverage') return <CoverageWorkspace />
   return <ComingSoonCard workspace={workspace} />
 }
 
