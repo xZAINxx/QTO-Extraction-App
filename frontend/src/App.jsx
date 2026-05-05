@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import SignInGate from './auth/SignInGate.jsx'
 import { useApi } from './hooks/useApi.js'
+import { useExtractionStream } from './hooks/useExtractionStream.js'
 import ProjectSwitcher from './panels/ProjectSwitcher.jsx'
 import UploadDropzone from './panels/UploadDropzone.jsx'
 import useProjectStore from './stores/projectStore.js'
@@ -46,6 +47,12 @@ export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState('takeoff')
   const [error, setError] = useState(null)
   const { apiFetch } = useApi()
+
+  const extractionId = useProjectStore((s) => s.extraction.extractionId)
+  const applyExtractionEvent = useProjectStore((s) => s.applyExtractionEvent)
+  // Tail the live SSE stream whenever an extraction is in flight.
+  // The hook closes its EventSource on terminator events automatically.
+  useExtractionStream(extractionId, applyExtractionEvent)
 
   useEffect(() => {
     let cancelled = false
@@ -144,12 +151,43 @@ function ModeBadge({ mode }) {
 // ────────────────────────────────────────────────────────────────────
 
 function SideNav({ activeWorkspace, onSelect }) {
+  const pdfs = useProjectStore((s) => s.pdfs)
+  const extraction = useProjectStore((s) => s.extraction)
+  const startExtraction = useProjectStore((s) => s.startExtraction)
+  const cancelExtraction = useProjectStore((s) => s.cancelExtraction)
+  const isRunning =
+    extraction.status === 'starting' ||
+    extraction.status === 'running' ||
+    extraction.status === 'pending'
+  const canRun = pdfs.length > 0 && !isRunning
+
   return (
     <aside className="sidenav">
-      <button className="btn btn--emerald btn--full" type="button">
-        <Upload size={14} />
-        <span>Run Extraction</span>
-      </button>
+      {isRunning ? (
+        <button
+          className="btn btn--ghost btn--full"
+          type="button"
+          onClick={() => cancelExtraction().catch(() => {})}
+        >
+          <Upload size={14} />
+          <span>Cancel ({extraction.page}/{extraction.total || '…'})</span>
+        </button>
+      ) : (
+        <button
+          className="btn btn--emerald btn--full"
+          type="button"
+          onClick={() => startExtraction().catch(() => {})}
+          disabled={!canRun}
+          title={
+            pdfs.length === 0
+              ? 'Upload a PDF first'
+              : 'Run extraction on the most-recent PDF'
+          }
+        >
+          <Upload size={14} />
+          <span>Run Extraction</span>
+        </button>
+      )}
 
       <nav className="sidenav__group">
         <div className="sidenav__label">Workspace</div>
@@ -220,6 +258,8 @@ function TakeoffWorkspace({ info }) {
       </div>
 
       <UploadDropzone />
+
+      <ExtractionStatusBanner />
 
       {pdfs.length > 0 && (
         <section className="pdf-list">
@@ -334,6 +374,8 @@ function ErrorState({ message }) {
 
 function StatusStrip({ info, error }) {
   const online = !!info && !error
+  const extraction = useProjectStore((s) => s.extraction)
+  const pdfs = useProjectStore((s) => s.pdfs)
   return (
     <footer className="status-strip">
       <span className={'status-dot' + (online ? ' status-dot--ok' : ' status-dot--off')} />
@@ -341,14 +383,83 @@ function StatusStrip({ info, error }) {
         {online ? 'Online' : error ? 'Offline' : 'Connecting…'}
       </span>
       <Bullet />
-      <span>0 line items</span>
+      <span>{extraction.rowCount} line items</span>
       <Bullet />
-      <span>0 sheets loaded</span>
-      <Bullet />
+      <span>{pdfs.length} {pdfs.length === 1 ? 'PDF' : 'PDFs'} loaded</span>
+      {extraction.status === 'running' && (
+        <>
+          <Bullet />
+          <span>
+            page {extraction.page}/{extraction.total || '…'} ·{' '}
+            {extraction.pageType ?? '…'}
+          </span>
+        </>
+      )}
+      {extraction.cost.cost_usd > 0 && (
+        <>
+          <Bullet />
+          <span>${extraction.cost.cost_usd.toFixed(4)}</span>
+        </>
+      )}
       <span className="status-strip__muted">
-        cost & token meters live in the desktop app for now
+        {extraction.status === 'running'
+          ? 'extraction running…'
+          : 'idle'}
       </span>
     </footer>
+  )
+}
+
+function ExtractionStatusBanner() {
+  const extraction = useProjectStore((s) => s.extraction)
+  if (extraction.status === 'idle') return null
+
+  const tone =
+    extraction.status === 'failed'
+      ? 'danger'
+      : extraction.status === 'completed'
+      ? 'success'
+      : extraction.status === 'canceled'
+      ? 'warning'
+      : 'info'
+
+  let title
+  let body
+  switch (extraction.status) {
+    case 'starting':
+      title = 'Starting extraction…'
+      body = 'Resolving PDF, picking the model pipeline.'
+      break
+    case 'pending':
+    case 'running':
+      title = `Extracting · page ${extraction.page}/${extraction.total || '…'}`
+      body = extraction.pageType
+        ? `Current page type: ${extraction.pageType.replace('_', ' ')}.`
+        : 'Pipeline is working through your drawing set.'
+      break
+    case 'completed':
+      title = 'Extraction complete'
+      body = `${extraction.rowCount} line items extracted ·`
+        + ` $${extraction.cost.cost_usd.toFixed(4)}`
+        + ` · ${extraction.cost.api_calls} API calls.`
+      break
+    case 'failed':
+      title = 'Extraction failed'
+      body = extraction.error ?? 'Unknown error.'
+      break
+    case 'canceled':
+      title = 'Extraction canceled'
+      body = `Stopped at page ${extraction.page}/${extraction.total || '?'}.`
+      break
+    default:
+      return null
+  }
+
+  return (
+    <div className={`extraction-banner extraction-banner--${tone}`}>
+      <div className="extraction-banner__title">{title}</div>
+      <div className="extraction-banner__body">{body}</div>
+    </div>
   )
 }
 

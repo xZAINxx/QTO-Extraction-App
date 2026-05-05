@@ -1015,3 +1015,60 @@
   font-size: 11px;
   color: var(--text-3);
 }
+
+/* ── Extraction banner (live status during a run) ─────────────────── */
+
+.extraction-banner {
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.extraction-banner--info {
+  background: var(--indigo-dim);
+  border-color: rgba(59, 130, 246, 0.30);
+}
+
+.extraction-banner--success {
+  background: var(--emerald-dim);
+  border-color: rgba(22, 163, 74, 0.30);
+}
+
+.extraction-banner--warning {
+  background: var(--amber-dim);
+  border-color: rgba(245, 158, 11, 0.30);
+}
+
+.extraction-banner--danger {
+  background: var(--red-dim);
+  border-color: rgba(239, 68, 68, 0.30);
+}
+
+.extraction-banner__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.extraction-banner--info .extraction-banner__title {
+  color: #93C5FD;
+}
+.extraction-banner--success .extraction-banner__title {
+  color: #6EE7A7;
+}
+.extraction-banner--warning .extraction-banner__title {
+  color: #FCD34D;
+}
+.extraction-banner--danger .extraction-banner__title {
+  color: #FCA5A5;
+}
+
+.extraction-banner__body {
+  font-size: 12px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+}

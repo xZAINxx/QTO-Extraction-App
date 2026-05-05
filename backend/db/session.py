@@ -1,30 +1,36 @@
 """Async SQLAlchemy engine + ``get_db`` FastAPI dependency.
 
-Single engine per process, lazily constructed on first use. Tests can
-swap the engine via ``init_engine(url=...)`` before any route handler
-runs. Production calls ``init_engine()`` once at app startup with the
-URL from ``Settings.database_url``.
+Single async engine per process, lazily constructed on first use.
+Tests can swap the engine via ``init_engine(url=...)`` before any
+route handler runs. Production calls ``init_engine()`` once at app
+startup with the URL from ``Settings.database_url``.
 
-The session factory is bound to the engine so every ``get_db`` yields
-a fresh ``AsyncSession`` that auto-closes (and rolls back on uncaught
-exceptions) when the request handler returns.
+A *synchronous* engine + ``Session`` factory live alongside the async
+ones for the extraction worker (commit 5) — the QTO pipeline is fully
+synchronous and runs inside ``asyncio.to_thread``; mixing async DB
+sessions across thread boundaries via ``run_coroutine_threadsafe``
+is uglier than just keeping a sync pool for the worker.
 """
 from __future__ import annotations
 
 from typing import AsyncIterator
 
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import Session, sessionmaker
 
 from backend.config import get_settings
 
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+_sync_engine: Engine | None = None
+_sync_session_factory: sessionmaker[Session] | None = None
 
 
 def init_engine(url: str | None = None, *, echo: bool | None = None) -> AsyncEngine:
@@ -66,12 +72,57 @@ def init_engine(url: str | None = None, *, echo: bool | None = None) -> AsyncEng
 
 async def dispose_engine() -> None:
     """Tear down the engine (call from FastAPI shutdown handler)."""
-    global _engine, _session_factory
+    global _engine, _session_factory, _sync_engine, _sync_session_factory
 
     if _engine is not None:
         await _engine.dispose()
     _engine = None
     _session_factory = None
+
+    if _sync_engine is not None:
+        _sync_engine.dispose()
+    _sync_engine = None
+    _sync_session_factory = None
+
+
+def get_sync_session_factory() -> sessionmaker[Session]:
+    """Return the synchronous Session factory for background workers.
+
+    The extraction worker (running inside ``asyncio.to_thread``) opens a
+    sync session per page so it doesn't have to bounce DB writes through
+    ``run_coroutine_threadsafe``. The pool is small (max ~3 in flight,
+    one per concurrent extraction) so it doesn't compete with the async
+    request pool.
+
+    The URL is the same as the async engine but with the driver swapped
+    from ``+asyncpg`` to ``+psycopg`` (psycopg3 in sync mode). Both
+    drivers ship in the requirements.
+    """
+    global _sync_engine, _sync_session_factory
+    if _sync_session_factory is not None:
+        return _sync_session_factory
+
+    settings = get_settings()
+    url = settings.database_url
+    # asyncpg → psycopg3 sync. If the URL doesn't have an explicit driver
+    # we fall through to psycopg3 by default (works for the docker-compose
+    # Postgres in dev and for Supabase Postgres in prod).
+    sync_url = url.replace("+asyncpg", "+psycopg")
+    if "+psycopg" not in sync_url and "://" in sync_url:
+        sync_url = sync_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+    _sync_engine = create_engine(
+        sync_url,
+        pool_size=3,
+        max_overflow=2,
+        pool_pre_ping=True,
+    )
+    _sync_session_factory = sessionmaker(
+        _sync_engine,
+        class_=Session,
+        expire_on_commit=False,
+    )
+    return _sync_session_factory
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
@@ -97,4 +148,9 @@ async def get_db() -> AsyncIterator[AsyncSession]:
             await session.close()
 
 
-__all__ = ["init_engine", "dispose_engine", "get_db"]
+__all__ = [
+    "init_engine",
+    "dispose_engine",
+    "get_db",
+    "get_sync_session_factory",
+]

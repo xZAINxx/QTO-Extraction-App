@@ -22,7 +22,12 @@ from .models import (
     TokenEvent,
     User,
 )
-from .session import dispose_engine, get_db, init_engine
+from .session import (
+    dispose_engine,
+    get_db,
+    get_sync_session_factory,
+    init_engine,
+)
 
 __all__ = [
     "Base",
@@ -34,5 +39,6 @@ __all__ = [
     "User",
     "dispose_engine",
     "get_db",
+    "get_sync_session_factory",
     "init_engine",
 ]
